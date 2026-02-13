@@ -1,0 +1,2 @@
+lag_minutes,coeff_setting,max_available_coeffs,effective_coeffs,train_accuracy,train_f1,train_recall,train_tss,train_hss,train_css,test_accuracy,test_f1,test_recall,test_tss,test_hss,test_css
+5,all,37,37,1.0,1.0,1.0,1.0,1.0,1.0,0.9262672811059908,0.3469387755102041,0.2328767123287671,0.22281381924700616,0.31766035325619674,0.20987654320987653

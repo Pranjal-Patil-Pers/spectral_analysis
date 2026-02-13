@@ -1,0 +1,52 @@
+{
+  "window_size": 45,
+  "forecast_lag_min": 0,
+  "coeff_setting": "25",
+  "observation_window_size": 360,
+  "event_onset_index": 720,
+  "target_channels": [
+    "p3_flux_ic",
+    "p5_flux_ic",
+    "p7_flux_ic",
+    "long"
+  ],
+  "class_names": [
+    "0",
+    "1"
+  ],
+  "positive_class_index": 1,
+  "positive_class_label": "1",
+  "train_metrics": {
+    "accuracy": 1.0,
+    "f1": 1.0,
+    "recall": 1.0,
+    "tss": 1.0,
+    "hss": 1.0,
+    "css": 1.0
+  },
+  "validation_metrics": {
+    "accuracy": 0.9897330595482546,
+    "f1": 0.9404761904761905,
+    "recall": 0.9875,
+    "tss": 0.9774328859060404,
+    "hss": 0.9348721514924575,
+    "css": 0.8876404494382022
+  },
+  "test_metrics": {
+    "accuracy": 0.9924078091106291,
+    "f1": 0.9590643274853801,
+    "recall": 0.9761904761904762,
+    "tss": 0.9702238890783044,
+    "hss": 0.9548816464633754,
+    "css": 0.9213483146067416
+  },
+  "max_available_coeffs": 23,
+  "effective_coeffs": 23,
+  "n_slices": 8,
+  "n_channels": 4,
+  "input_shape_train": [
+    996,
+    8,
+    184
+  ]
+}

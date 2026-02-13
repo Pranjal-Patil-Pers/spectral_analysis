@@ -1,0 +1,26 @@
+{
+  "window_size": 90,
+  "forecast_lag_min": 0,
+  "coeff_setting": "25",
+  "observation_window_size": 360,
+  "event_onset_index": 720,
+  "target_channels": [
+    "p3_flux_ic",
+    "p5_flux_ic",
+    "p7_flux_ic",
+    "long"
+  ],
+  "class_names": [
+    "0",
+    "1"
+  ],
+  "max_available_coeffs": 46,
+  "effective_coeffs": 25,
+  "n_slices": 4,
+  "n_channels": 4,
+  "input_shape_train": [
+    996,
+    8,
+    100
+  ]
+}
