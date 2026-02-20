@@ -2,6 +2,10 @@
 event-anchored window. For each forecast lag, data is extracted as
 [event_index - lag - observation_window : event_index - lag], then
 split into non-overlapping FFT windows across multiple sizes.
+
+All coefficients are the size of all mag coeffcients generated per slice of the FFT, which is determined by the FFT window size. For example, a 360-minute window with 1-minute cadence generates 181 coefficients per channel (including DC), so "all" means using all 181 mag and 181 phase features per channel per slice.
+
+Top-k is applied per-slice, selecting the first k magnitude and first k phase coefficients per channel (not k pairs), so effective_coeffs=k means using k magnitude and k phase features per channel per slice.
 """
 
 from __future__ import annotations
@@ -54,7 +58,7 @@ class TimeSeriesDataset:
         return len(self.metadata)
 
     @staticmethod
-    def _parse_event_time(filename: str) -> pd.Timestamp | pd.NaT:
+    def _parse_event_time(filename: str) -> pd.Timestamp :
         stem = Path(str(filename)).stem
         dt = pd.to_datetime(stem, format="%Y-%m-%d_%H-%M", errors="coerce")
         if pd.isna(dt):
@@ -272,7 +276,7 @@ def plot_metric_heatmaps(results_df: pd.DataFrame, output_path: Path, split_pref
 
     plot_df = results_df.copy()
     plot_df["window_lag"] = plot_df.apply(
-        lambda r: f"W{int(r['window_size'])}_H{int(r['forecast_lag_min'])}",
+        lambda r: f"W{r['window_size']}_lag{r['forecast_lag_min']}",
         axis=1,
     )
 
@@ -409,8 +413,8 @@ def run_experiments(
 
                 rows.append(
                     {
-                        "window_size": fft_window_size,
-                        "forecast_lag_min": lag,
+                        "window_size": f"{int(fft_window_size):03}",
+                        "forecast_lag_min": f"{int(lag):03}",
                         "input_start": input_start,
                         "input_end": input_end,
                         "coeff_setting": str(coeff),
@@ -484,7 +488,7 @@ def main():
     event_onset_index = 720
     observation_window_size = 360
     fft_window_sizes = [360, 180, 90, 45]
-    forecast_lags = [0, 5, 10, 60]
+    forecast_lags = [5, 15, 30, 60, 120]
     coeff_options: list[int | str] = ["all", 100, 50, 25, 10, 5]
 
     results_df = run_experiments(
@@ -552,6 +556,7 @@ def main():
         print(f"{col}: {best[col]}")
     print("=" * 70)
     print(f"Saved best config: {best_path}")
+  
 
 
 if __name__ == "__main__":

@@ -1,0 +1,2 @@
+window_size,forecast_lag_min,effective_coeffs,max_available_coeffs,calibration_status,val_brier_raw,val_brier_calibrated,test_brier_raw,test_brier_calibrated
+90,5,20,46,calibrated_sigmoid_prefit,0.01138762263289984,0.007846042625436709,0.014503687635574837,0.013472319548236687
