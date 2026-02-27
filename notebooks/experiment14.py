@@ -13,9 +13,11 @@ from __future__ import annotations
 
 import os
 import math
+import sys
 from datetime import datetime
 from pathlib import Path
 
+import joblib
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -988,6 +990,55 @@ def decode_local_feature_components(
     }
 
 
+def build_lag_feature_names(
+    feature_meta: list[dict[str, int]],
+    channel_names: list[str] | None = None,
+) -> list[str]:
+    names: list[str] = []
+    for meta in feature_meta:
+        window = int(meta["window_size"])
+        channels = int(meta["channels"])
+        n_slices = int(meta["n_slices"])
+        k = int(meta["effective_coeffs"])
+
+        for channel_fft in range(2 * channels):
+            if channel_fft < channels:
+                mag_phase = "mag"
+                channel_index = channel_fft
+            else:
+                mag_phase = "phase"
+                channel_index = channel_fft - channels
+
+            if channel_names and 0 <= channel_index < len(channel_names):
+                channel_name = str(channel_names[channel_index])
+            else:
+                channel_name = f"ch{channel_index}"
+
+            for s_idx in range(n_slices):
+                for k_idx in range(k):
+                    names.append(
+                        f"W{window}_{mag_phase}_{channel_name}_s{s_idx + 1}_k{k_idx + 1}"
+                    )
+    return names
+
+
+def _load_sep_cfe_dice_api(sep_project_root: Path):
+    if not sep_project_root.exists():
+        raise FileNotFoundError(f"SEP project root not found: {sep_project_root}")
+
+    root_str = str(sep_project_root)
+    if root_str not in sys.path:
+        sys.path.append(root_str)
+
+    from src.SEP_CFE_DiCE import (  # type: ignore
+        build_constrained_explainer,
+        extract_counterfactual_dfs,
+        generate_counterfactuals as dice_generate_counterfactuals,
+    )
+
+    return build_constrained_explainer, dice_generate_counterfactuals, extract_counterfactual_dfs
+
+
 def plot_feature_importance_for_lag(
     feature_importances: np.ndarray,
     feature_meta: list[dict[str, int]],
@@ -1122,13 +1173,37 @@ def run_calibration_and_feature_importance_for_all_lags(
     random_state: int = 42,
     top_n_features: int = 25,
     channel_names: list[str] | None = None,
-) -> tuple[pd.DataFrame, pd.DataFrame]:
+    save_models_dir: Path | None = None,
+    enable_constrained_dice: bool = True,
+    sep_project_root: Path | None = None,
+    counterfactuals_output_dir: Path | None = None,
+    counterfactuals_per_query: int = 3,
+    max_queries_per_lag: int = 5,
+    outcome_name: str = "Event_Y_N",
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     positive_class = pick_positive_class(classes)
     y_val_bin = (y_val == positive_class).astype(int)
     y_test_bin = (y_test == positive_class).astype(int)
 
     calibration_rows: list[dict[str, float | int | str]] = []
     feature_rows: list[dict[str, float | int | str]] = []
+    counterfactual_rows: list[dict[str, float | int | str]] = []
+
+    build_constrained_explainer = None
+    dice_generate_counterfactuals = None
+    extract_counterfactual_dfs = None
+    if enable_constrained_dice:
+        if sep_project_root is None:
+            print("ConstrainedDiCE disabled: missing sep_project_root.")
+        else:
+            try:
+                (
+                    build_constrained_explainer,
+                    dice_generate_counterfactuals,
+                    extract_counterfactual_dfs,
+                ) = _load_sep_cfe_dice_api(sep_project_root)
+            except Exception as exc:
+                print(f"ConstrainedDiCE disabled: {exc}")
 
     for lag in forecast_lags:
         selected_coeffs_by_window = build_selected_coeffs_by_window_for_lag(
@@ -1151,21 +1226,52 @@ def run_calibration_and_feature_importance_for_all_lags(
             event_index=event_index,
             observation_window_size=observation_window_size,
         )
+        feature_names = build_lag_feature_names(feature_meta, channel_names=channel_names)
+        if len(feature_names) != X_train_flat.shape[1]:
+            raise ValueError(
+                f"Feature-name length mismatch for lag={lag}: "
+                f"{len(feature_names)} names vs {X_train_flat.shape[1]} features."
+            )
+
+        train_feature_df = pd.DataFrame(X_train_flat, columns=feature_names)
+        val_feature_df = pd.DataFrame(X_val_flat, columns=feature_names)
+        test_feature_df = pd.DataFrame(X_test_flat, columns=feature_names)
 
         model = RandomForestClassifier(
             n_estimators=300,
             random_state=random_state + int(lag),
             n_jobs=-1,
         )
-        model.fit(X_train_flat, y_train)
+        model.fit(train_feature_df, y_train)
 
-        val_prob_raw = get_positive_class_probability(model, X_val_flat, positive_class)
-        test_prob_raw = get_positive_class_probability(model, X_test_flat, positive_class)
+        model_path = ""
+        if save_models_dir is not None:
+            save_models_dir.mkdir(parents=True, exist_ok=True)
+            model_file_path = save_models_dir / f"experiment14_lag{int(lag)}_rf_model_{stamp}.joblib"
+            joblib.dump(
+                {
+                    "model": model,
+                    "forecast_lag_min": int(lag),
+                    "feature_names": feature_names,
+                    "feature_meta": feature_meta,
+                    "selected_coeffs_by_window": selected_coeffs_by_window,
+                    "positive_class": int(positive_class),
+                    "channel_names": list(channel_names or []),
+                    "event_index": int(event_index),
+                    "observation_window_size": int(observation_window_size),
+                },
+                model_file_path,
+            )
+            model_path = str(model_file_path)
+
+        val_pred = model.predict(val_feature_df)
+        val_prob_raw = get_positive_class_probability(model, val_feature_df, positive_class)
+        test_prob_raw = get_positive_class_probability(model, test_feature_df, positive_class)
 
         calibrator = None
         calibration_status = "calibrated_sigmoid_prefit"
         try:
-            calibrator = calibrate_prefit_sigmoid(model, X_val_flat, y_val)
+            calibrator = calibrate_prefit_sigmoid(model, val_feature_df, y_val)
             if calibrator is None:
                 calibration_status = "skipped_single_class_validation"
         except Exception as exc:
@@ -1173,13 +1279,13 @@ def run_calibration_and_feature_importance_for_all_lags(
             print(f"Calibration warning for lag={lag}: {exc}")
 
         if calibrator is not None:
-            val_prob_cal = get_positive_class_probability(calibrator, X_val_flat, positive_class)
-            test_prob_cal = get_positive_class_probability(calibrator, X_test_flat, positive_class)
+            val_prob_cal = get_positive_class_probability(calibrator, val_feature_df, positive_class)
+            test_prob_cal = get_positive_class_probability(calibrator, test_feature_df, positive_class)
         else:
             val_prob_cal = val_prob_raw.copy()
             test_prob_cal = test_prob_raw.copy()
 
-        calibration_plot_path = output_dir / f"experiment13_lag{int(lag)}_calibration_{stamp}.png"
+        calibration_plot_path = output_dir / f"experiment14_lag{int(lag)}_calibration_{stamp}.png"
         plot_calibration_curves(
             y_val_bin=y_val_bin,
             y_test_bin=y_test_bin,
@@ -1204,11 +1310,12 @@ def run_calibration_and_feature_importance_for_all_lags(
                 "test_brier_raw": float(brier_score_loss(y_test_bin, test_prob_raw)),
                 "test_brier_calibrated": float(brier_score_loss(y_test_bin, test_prob_cal)),
                 "calibration_plot_path": str(calibration_plot_path),
+                "model_path": model_path,
             }
         )
 
         feature_importances = np.asarray(model.feature_importances_, dtype=np.float64)
-        fi_plot_path = output_dir / f"experiment13_lag{int(lag)}_feature_importance_{stamp}.png"
+        fi_plot_path = output_dir / f"experiment14_lag{int(lag)}_feature_importance_{stamp}.png"
         plot_feature_importance_for_lag(
             feature_importances=feature_importances,
             feature_meta=feature_meta,
@@ -1251,15 +1358,103 @@ def run_calibration_and_feature_importance_for_all_lags(
                 }
             )
 
+        cf_status = "disabled"
+        cf_output_path = ""
+        cf_rows_generated = 0
+        queries_used = 0
+        if (
+            build_constrained_explainer is not None
+            and dice_generate_counterfactuals is not None
+            and extract_counterfactual_dfs is not None
+        ):
+            try:
+                candidate_idx = np.where(val_pred != positive_class)[0]
+                if candidate_idx.size == 0:
+                    candidate_idx = np.arange(val_feature_df.shape[0])
+                query_idx = candidate_idx[: max(0, int(max_queries_per_lag))]
+                queries_used = int(query_idx.shape[0])
+
+                if queries_used == 0:
+                    cf_status = "skipped_no_queries"
+                else:
+                    train_dice_df = train_feature_df.copy()
+                    train_dice_df[outcome_name] = y_train
+                    query_df = val_feature_df.iloc[query_idx].copy()
+
+                    explainer, _ = build_constrained_explainer(
+                        dataframe=train_dice_df,
+                        model=model,
+                        outcome_name=outcome_name,
+                        constraints=None,
+                        continuous_features=feature_names,
+                        backend="sklearn",
+                        model_type="classifier",
+                    )
+
+                    cf_obj = dice_generate_counterfactuals(
+                        explainer=explainer,
+                        query_instances=query_df,
+                        total_cfs=int(counterfactuals_per_query),
+                        desired_class=int(positive_class),
+                        proximity_weight=0.2,
+                        sparsity_weight=0.2,
+                        diversity_weight=5.0,
+                    )
+
+                    per_query_cf_dfs = extract_counterfactual_dfs(cf_obj)
+                    lag_cf_tables: list[pd.DataFrame] = []
+                    for q_i, cf_df in enumerate(per_query_cf_dfs):
+                        if cf_df is None or len(cf_df) == 0:
+                            continue
+                        src_idx = int(query_idx[q_i]) if q_i < len(query_idx) else -1
+                        augmented = cf_df.copy()
+                        augmented.insert(0, "forecast_lag_min", int(lag))
+                        augmented.insert(1, "query_row_in_val", src_idx)
+                        if src_idx >= 0:
+                            augmented.insert(2, "query_true_label", int(y_val[src_idx]))
+                            augmented.insert(3, "query_pred_label", int(val_pred[src_idx]))
+                        lag_cf_tables.append(augmented)
+
+                    if lag_cf_tables:
+                        if counterfactuals_output_dir is None:
+                            counterfactuals_output_dir = output_dir / "counterfactuals"
+                        counterfactuals_output_dir.mkdir(parents=True, exist_ok=True)
+                        lag_cf_df = pd.concat(lag_cf_tables, ignore_index=True)
+                        lag_cf_path = (
+                            counterfactuals_output_dir
+                            / f"experiment14_lag{int(lag)}_counterfactuals_{stamp}.csv"
+                        )
+                        lag_cf_df.to_csv(lag_cf_path, index=False)
+                        cf_output_path = str(lag_cf_path)
+                        cf_rows_generated = int(len(lag_cf_df))
+                        cf_status = "ok"
+                    else:
+                        cf_status = "generated_empty"
+            except Exception as exc:
+                cf_status = f"failed: {exc}"
+
+        counterfactual_rows.append(
+            {
+                "forecast_lag_min": int(lag),
+                "queries_used": int(queries_used),
+                "counterfactuals_per_query": int(counterfactuals_per_query),
+                "counterfactual_rows_generated": int(cf_rows_generated),
+                "counterfactual_status": cf_status,
+                "counterfactual_output_path": cf_output_path,
+                "model_path": model_path,
+            }
+        )
+
     calibration_df = pd.DataFrame(calibration_rows)
     feature_df = pd.DataFrame(feature_rows)
+    counterfactual_df = pd.DataFrame(counterfactual_rows)
     if len(feature_df) > 0:
         feature_df["rank_within_lag"] = (
             feature_df.groupby("forecast_lag_min")["importance"]
             .rank(method="first", ascending=False)
             .astype(int)
         )
-    return calibration_df, feature_df
+    return calibration_df, feature_df, counterfactual_df
 
 
 def build_dynamic_coeff_options(max_coeffs: int) -> list[int]:
@@ -2023,31 +2218,36 @@ def main():
         random_state=42,
     )
 
-    output_dir = data_root / "reports" / "experiment13"
+    output_dir = data_root / "reports" / "experiment14"
     output_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-    results_path = output_dir / f"experiment13_results_{stamp}.csv"
+    results_path = output_dir / f"experiment14_results_{stamp}.csv"
     results_df.to_csv(results_path, index=False)
     print(f"\nSaved results: {results_path}")
 
-    setup_summary_path = output_dir / f"experiment13_feature_selection_summary_{stamp}.csv"
+    setup_summary_path = output_dir / f"experiment14_feature_selection_summary_{stamp}.csv"
     setup_summary_df.to_csv(setup_summary_path, index=False)
     print(f"Saved feature-selection summary: {setup_summary_path}")
 
-    lag_results_path = output_dir / f"experiment13_lag_concatenated_results_{stamp}.csv"
+    lag_results_path = output_dir / f"experiment14_lag_concatenated_results_{stamp}.csv"
     lag_results_df.to_csv(lag_results_path, index=False)
     print(f"Saved lag-level concatenated results: {lag_results_path}")
 
-    lag_level_val_path = output_dir / f"experiment13_lag_level_validation_by_lag_{stamp}.png"
+    lag_level_val_path = output_dir / f"experiment14_lag_level_validation_by_lag_{stamp}.png"
     plot_lag_level_validation_by_lag(lag_results_df, lag_level_val_path)
     print(f"Saved lag-level validation-by-lag plot: {lag_level_val_path}")
 
     best = select_best_lag_result(lag_results_df)
-    best_path = output_dir / f"experiment13_best_lag_config_{stamp}.csv"
+    best_path = output_dir / f"experiment14_best_lag_config_{stamp}.csv"
     best.to_frame().T.to_csv(best_path, index=False)
 
-    calibration_all_df, feature_importance_df = run_calibration_and_feature_importance_for_all_lags(
+    models_dir = output_dir / "saved_models"
+    counterfactuals_dir = output_dir / "counterfactuals"
+    sep_cfe_lib_dir = Path("/Users/pranjal/PycharmProjects/SolarEnergyParticlePrediction/src/SEP_CFE_DiCE")
+    sep_project_root = sep_cfe_lib_dir.parents[1]
+
+    calibration_all_df, feature_importance_df, counterfactual_summary_df = run_calibration_and_feature_importance_for_all_lags(
         X_train=X_train,
         y_train=y_train,
         X_val=X_val,
@@ -2065,15 +2265,28 @@ def main():
         random_state=42,
         top_n_features=25,
         channel_names=target_channels,
+        save_models_dir=models_dir,
+        enable_constrained_dice=True,
+        sep_project_root=sep_project_root,
+        counterfactuals_output_dir=counterfactuals_dir,
+        counterfactuals_per_query=3,
+        max_queries_per_lag=5,
+        outcome_name="Event_Y_N",
     )
 
-    calibration_all_path = output_dir / f"experiment13_all_lags_calibration_summary_{stamp}.csv"
+    calibration_all_path = output_dir / f"experiment14_all_lags_calibration_summary_{stamp}.csv"
     calibration_all_df.to_csv(calibration_all_path, index=False)
     print(f"Saved all-lags calibration summary: {calibration_all_path}")
 
-    feature_importance_path = output_dir / f"experiment13_all_lags_feature_importance_{stamp}.csv"
+    feature_importance_path = output_dir / f"experiment14_all_lags_feature_importance_{stamp}.csv"
     feature_importance_df.to_csv(feature_importance_path, index=False)
     print(f"Saved all-lags feature importance table: {feature_importance_path}")
+
+    counterfactual_summary_path = output_dir / f"experiment14_all_lags_counterfactual_summary_{stamp}.csv"
+    counterfactual_summary_df.to_csv(counterfactual_summary_path, index=False)
+    print(f"Saved all-lags counterfactual summary: {counterfactual_summary_path}")
+    print(f"Saved lag models under: {models_dir}")
+    print(f"Saved lag counterfactual tables under: {counterfactuals_dir}")
 
     print("\n" + "=" * 70)
     print(

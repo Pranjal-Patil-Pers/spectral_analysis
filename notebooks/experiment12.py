@@ -28,6 +28,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from matplotlib.lines import Line2D
+from matplotlib.ticker import FuncFormatter, MaxNLocator
 from scipy.fft import rfft
 from sklearn.calibration import CalibratedClassifierCV, calibration_curve
 from sklearn.ensemble import RandomForestClassifier
@@ -389,6 +390,12 @@ def plot_calibration_curves(
     plt.close()
 
 
+def apply_2k_coefficient_ticks(ax):
+    """Display x ticks as 2k (mag+phase) while plotting against k."""
+    ax.xaxis.set_major_locator(MaxNLocator(integer=True))
+    ax.xaxis.set_major_formatter(FuncFormatter(lambda x, _pos: f"{int(round(2 * x))}"))
+
+
 def plot_metric_lineplots(results_df: pd.DataFrame, output_path: Path, split_prefix: str):
     metrics = [
         f"{split_prefix}_tss",
@@ -399,6 +406,15 @@ def plot_metric_lineplots(results_df: pd.DataFrame, output_path: Path, split_pre
         f"{split_prefix}_precision",
         f"{split_prefix}_recall",
     ]
+    metric_ylim = {
+        "tss": (-1.0, 1.0),
+        "hss": (-1.0, 1.0),
+        "css": (0.0, 1.0),
+        "accuracy": (0.0, 1.0),
+        "f1": (0.0, 1.0),
+        "precision": (0.0, 1.0),
+        "recall": (0.0, 1.0),
+    }
 
     plot_df = results_df.copy()
     plot_df["window_size"] = plot_df["window_size"].astype(int)
@@ -454,8 +470,12 @@ def plot_metric_lineplots(results_df: pd.DataFrame, output_path: Path, split_pre
                 )
 
         ax.set_title(metric.replace("_", " ").upper())
-        ax.set_xlabel("# coefficients (k)")
+        ax.set_xlabel("# coefficients (2k, mag+phase)")
         ax.set_ylabel("score")
+        metric_key = metric.replace(f"{split_prefix}_", "", 1)
+        y_min, y_max = metric_ylim.get(metric_key, (-1.0, 1.0))
+        ax.set_ylim(y_min, y_max)
+        apply_2k_coefficient_ticks(ax)
         ax.grid(True, alpha=0.25)
 
     if len(axes) > len(metrics):
@@ -521,7 +541,7 @@ def plot_consolidated_metrics_by_setup(
     if not setup_list:
         return
 
-    n_cols = 4
+    n_cols = 5
     n_rows = int(math.ceil(len(setup_list) / n_cols))
     fig, axes = plt.subplots(
         n_rows,
@@ -556,8 +576,10 @@ def plot_consolidated_metrics_by_setup(
             )
 
         ax.set_title(f"W{int(window_size)}_lag{int(lag)}")
-        ax.set_xlabel("# coefficients (k)")
+        ax.set_xlabel("# coefficients (2k, mag+phase)")
         ax.set_ylabel("score")
+        ax.set_ylim(-1.0, 1.0)
+        apply_2k_coefficient_ticks(ax)
         ax.grid(True, alpha=0.25)
 
     for ax in flat_axes[len(setup_list):]:
@@ -600,10 +622,16 @@ def plot_validation_elbow_curves(
     )
     setup_list = list(setup_keys)
     n_setups = len(setup_list)
-    n_cols = 4
+    n_cols = 5
     n_rows = int(math.ceil(n_setups / n_cols))
 
-    fig, axes = plt.subplots(n_rows, n_cols, figsize=(6 * n_cols, 4 * n_rows), squeeze=False)
+    fig, axes = plt.subplots(
+        n_rows,
+        n_cols,
+        figsize=(6 * n_cols, 4 * n_rows),
+        squeeze=False,
+        sharey=True,
+    )
     flat_axes = axes.flatten()
 
     for ax_idx, (window_size, lag) in enumerate(setup_list):
@@ -653,8 +681,10 @@ def plot_validation_elbow_curves(
         ax.scatter([test_peak_k], [test_peak_y], color="#9467bd", s=65, marker="X", label="test_peak")
 
         ax.set_title(f"W{int(window_size)}_lag{int(lag)}")
-        ax.set_xlabel("# coefficients (k)")
+        ax.set_xlabel("# coefficients (2k, mag+phase)")
         ax.set_ylabel("CSS")
+        ax.set_ylim(0.0, 1.0)
+        apply_2k_coefficient_ticks(ax)
         ax.grid(True, alpha=0.25)
 
     for ax in flat_axes[n_setups:]:
