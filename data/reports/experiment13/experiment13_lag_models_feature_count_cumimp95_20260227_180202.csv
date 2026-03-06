@@ -1,0 +1,6 @@
+forecast_lag_min,model_name,model_label,windows_used,selected_coefficients,total_input_dim,feature_count_total,feature_count_cumimp95,feature_fraction_cumimp95,cumimp_reached_at_cumimp95,cumulative_importance_threshold
+5,RandomForestClassifier,RandomForestClassifier_lag5,"45,90,180,360","W45:11,W90:20,W180:23,W360:94",2464,2464,605,0.24553571428571427,0.9500036512467063,0.95
+15,RandomForestClassifier,RandomForestClassifier_lag15,"45,90,180,360","W45:10,W90:11,W180:19,W360:76",1904,1904,725,0.3807773109243697,0.9501216495699697,0.95
+30,RandomForestClassifier,RandomForestClassifier_lag30,"45,90,180,360","W45:11,W90:21,W180:28,W360:3",1848,1848,914,0.4945887445887446,0.9501311344988812,0.95
+60,RandomForestClassifier,RandomForestClassifier_lag60,"45,90,180,360","W45:14,W90:13,W180:11,W360:7",1544,1544,928,0.6010362694300518,0.9500066001985491,0.95
+120,RandomForestClassifier,RandomForestClassifier_lag120,"45,90,180,360","W45:21,W90:44,W180:76,W360:111",4856,4856,2109,0.43430807248764414,0.9500368415110023,0.95

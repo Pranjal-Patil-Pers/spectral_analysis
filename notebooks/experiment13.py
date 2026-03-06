@@ -1086,6 +1086,95 @@ def plot_feature_importance_for_lag(
     plt.close()
 
 
+def count_features_for_cumulative_importance(
+    feature_importances: np.ndarray,
+    threshold: float = 0.95,
+) -> tuple[int, float]:
+    threshold = float(threshold)
+    if not 0.0 < threshold <= 1.0:
+        raise ValueError(f"threshold must be in (0, 1], got {threshold}.")
+
+    importances = np.asarray(feature_importances, dtype=np.float64).ravel()
+    importances = importances[np.isfinite(importances)]
+    if importances.size == 0:
+        return 0, 0.0
+
+    total_importance = float(importances.sum())
+    if total_importance <= 0.0:
+        return 0, 0.0
+
+    sorted_importances = np.sort(importances)[::-1]
+    cumulative = np.cumsum(sorted_importances) / total_importance
+    idx = int(np.searchsorted(cumulative, threshold, side="left"))
+    idx = min(idx, sorted_importances.size - 1)
+    return int(idx + 1), float(cumulative[idx])
+
+
+def build_cumimp95_feature_count_summary(calibration_df: pd.DataFrame) -> pd.DataFrame:
+    if len(calibration_df) == 0:
+        return pd.DataFrame()
+
+    required_cols = [
+        "forecast_lag_min",
+        "model_name",
+        "model_label",
+        "windows_used",
+        "selected_coefficients",
+        "total_input_dim",
+        "feature_count_total",
+        "feature_count_cumimp95",
+        "feature_fraction_cumimp95",
+        "cumimp_reached_at_cumimp95",
+        "cumulative_importance_threshold",
+    ]
+    missing_cols = [col for col in required_cols if col not in calibration_df.columns]
+    if missing_cols:
+        raise ValueError(
+            f"calibration_df missing required cumulative-importance columns: {missing_cols}"
+        )
+
+    summary_df = calibration_df[required_cols].copy()
+    summary_df["forecast_lag_min"] = pd.to_numeric(summary_df["forecast_lag_min"], errors="coerce")
+    summary_df["feature_count_total"] = pd.to_numeric(summary_df["feature_count_total"], errors="coerce")
+    summary_df["feature_count_cumimp95"] = pd.to_numeric(summary_df["feature_count_cumimp95"], errors="coerce")
+    summary_df = summary_df.dropna(subset=["forecast_lag_min", "feature_count_cumimp95"]).copy()
+    summary_df["forecast_lag_min"] = summary_df["forecast_lag_min"].astype(int)
+    summary_df["feature_count_cumimp95"] = summary_df["feature_count_cumimp95"].astype(int)
+    summary_df = summary_df.sort_values(["forecast_lag_min", "model_name"]).reset_index(drop=True)
+    return summary_df
+
+
+def plot_feature_count_cumimp95_by_model(
+    summary_df: pd.DataFrame,
+    output_path: Path,
+):
+    if len(summary_df) == 0:
+        return
+
+    plot_df = summary_df.sort_values(["forecast_lag_min", "model_name"]).copy()
+    fig_height = max(5.0, 0.55 * len(plot_df))
+    fig, ax = plt.subplots(figsize=(14, fig_height))
+    bars = ax.barh(plot_df["model_label"], plot_df["feature_count_cumimp95"], color="#1f77b4")
+
+    ax.set_title("Feature count required for 95% cumulative importance")
+    ax.set_xlabel("# features")
+    ax.set_ylabel("Model combination")
+    ax.grid(True, axis="x", alpha=0.25)
+
+    max_count = max(1, int(plot_df["feature_count_cumimp95"].max()))
+    ax.set_xlim(0, max_count * 1.15)
+
+    for bar in bars:
+        width = float(bar.get_width())
+        y = float(bar.get_y() + bar.get_height() / 2.0)
+        ax.text(width, y, f" {int(round(width))}", va="center", ha="left", fontsize=8)
+
+    plt.tight_layout()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    plt.savefig(output_path, dpi=220, bbox_inches="tight")
+    plt.close()
+
+
 def build_selected_coeffs_by_window_for_lag(
     setup_summary_df: pd.DataFrame,
     lag: int,
@@ -1129,6 +1218,7 @@ def run_calibration_and_feature_importance_for_all_lags(
 
     calibration_rows: list[dict[str, float | int | str]] = []
     feature_rows: list[dict[str, float | int | str]] = []
+    cumimp_threshold = 0.95
 
     for lag in forecast_lags:
         selected_coeffs_by_window = build_selected_coeffs_by_window_for_lag(
@@ -1191,13 +1281,31 @@ def run_calibration_and_feature_importance_for_all_lags(
             title_prefix=f"Lag {int(lag)} min",
         )
 
+        feature_importances = np.asarray(model.feature_importances_, dtype=np.float64)
+        feature_count_cumimp95, cumimp_reached = count_features_for_cumulative_importance(
+            feature_importances,
+            threshold=cumimp_threshold,
+        )
+        model_name = model.__class__.__name__
+        model_label = f"{model_name}_lag{int(lag)}"
         coeff_tokens = [f"W{m['window_size']}:{m['effective_coeffs']}" for m in feature_meta]
         calibration_rows.append(
             {
                 "forecast_lag_min": int(lag),
+                "model_name": model_name,
+                "model_label": model_label,
                 "windows_used": ",".join(str(m["window_size"]) for m in feature_meta),
                 "selected_coefficients": ",".join(coeff_tokens),
                 "total_input_dim": int(X_train_flat.shape[1]),
+                "feature_count_total": int(feature_importances.size),
+                "feature_count_cumimp95": int(feature_count_cumimp95),
+                "feature_fraction_cumimp95": (
+                    float(feature_count_cumimp95) / float(feature_importances.size)
+                    if feature_importances.size > 0
+                    else np.nan
+                ),
+                "cumimp_reached_at_cumimp95": float(cumimp_reached),
+                "cumulative_importance_threshold": float(cumimp_threshold),
                 "calibration_status": calibration_status,
                 "val_brier_raw": float(brier_score_loss(y_val_bin, val_prob_raw)),
                 "val_brier_calibrated": float(brier_score_loss(y_val_bin, val_prob_cal)),
@@ -1207,7 +1315,6 @@ def run_calibration_and_feature_importance_for_all_lags(
             }
         )
 
-        feature_importances = np.asarray(model.feature_importances_, dtype=np.float64)
         fi_plot_path = output_dir / f"experiment13_lag{int(lag)}_feature_importance_{stamp}.png"
         plot_feature_importance_for_lag(
             feature_importances=feature_importances,
@@ -2075,6 +2182,21 @@ def main():
     feature_importance_df.to_csv(feature_importance_path, index=False)
     print(f"Saved all-lags feature importance table: {feature_importance_path}")
 
+    cumimp95_summary_df = build_cumimp95_feature_count_summary(calibration_all_df)
+    if len(cumimp95_summary_df) > 0:
+        cumimp95_summary_path = output_dir / f"experiment13_lag_models_feature_count_cumimp95_{stamp}.csv"
+        cumimp95_summary_df.to_csv(cumimp95_summary_path, index=False)
+        print(f"Saved 95% cumulative-importance feature-count summary: {cumimp95_summary_path}")
+
+        cumimp95_plot_path = output_dir / f"experiment13_lag_models_feature_count_cumimp95_{stamp}.png"
+        plot_feature_count_cumimp95_by_model(
+            summary_df=cumimp95_summary_df,
+            output_path=cumimp95_plot_path,
+        )
+        print(f"Saved 95% cumulative-importance feature-count bar plot: {cumimp95_plot_path}")
+    else:
+        print("No lag-model feature-importance data available for 95% cumulative-importance summary.")
+
     print("\n" + "=" * 70)
     print(
         "Best lag-level configuration (sorted by val_css, val_tss, val_hss, val_f1 "
@@ -2103,6 +2225,21 @@ def main():
         print(f"{col}: {best[col]}")
     print("=" * 70)
     print(f"Saved best lag config: {best_path}")
+
+    if len(cumimp95_summary_df) > 0:
+        print("\nLag-model feature counts at 95% cumulative importance:")
+        print(
+            cumimp95_summary_df[
+                [
+                    "forecast_lag_min",
+                    "model_name",
+                    "feature_count_total",
+                    "feature_count_cumimp95",
+                    "feature_fraction_cumimp95",
+                    "cumimp_reached_at_cumimp95",
+                ]
+            ].to_string(index=False)
+        )
 
     if len(setup_summary_df) > 0:
         print("\nPer-setup selection snapshot (derived from Experiment 12 logs):")
