@@ -639,9 +639,34 @@ def choose_training_examples_for_counterfactuals(
     model: RandomForestClassifier,
     classes: np.ndarray,
     num_per_class: int = 2,
+    chosen_sample_ids: list[str] | None = None,
 ) -> list[dict[str, int | str]]:
     preds = model.predict(X_train_sel)
     chosen: list[dict[str, int | str]] = []
+    requested_ids = [str(sample_id) for sample_id in (chosen_sample_ids or []) if str(sample_id).strip()]
+
+    if requested_ids:
+        train_id_to_index = {str(sample_id): idx for idx, sample_id in enumerate(train_ids)}
+        missing_ids = [sample_id for sample_id in requested_ids if sample_id not in train_id_to_index]
+        if missing_ids:
+            raise ValueError(
+                "Chosen counterfactual example file(s) were not found in the training split: "
+                + ", ".join(missing_ids)
+            )
+
+        for sample_id in requested_ids:
+            idx = int(train_id_to_index[sample_id])
+            chosen.append(
+                {
+                    "train_index": int(idx),
+                    "sample_id": str(train_ids[int(idx)]),
+                    "label": int(y_train[int(idx)]),
+                    "label_name": str(classes[int(y_train[int(idx)])]),
+                    "predicted_label": int(preds[int(idx)]),
+                    "predicted_label_name": str(classes[int(preds[int(idx)])]),
+                }
+            )
+        return chosen
 
     for cls_idx in sorted(np.unique(y_train).tolist()):
         cls_mask = y_train == int(cls_idx)
@@ -685,6 +710,7 @@ def make_dice_explainer(
     return dice_ml.Dice(data_interface, model_interface, method="random")
 
 
+
 def plot_counterfactual_timeseries(
     sample_id: str,
     label_name: str,
@@ -703,12 +729,12 @@ def plot_counterfactual_timeseries(
     channels = int(original_obs.shape[1])
     fig, ax = plt.subplots(1, 1, figsize=(14, 6))
     x = np.arange(original_obs.shape[0], dtype=np.int64)
-    custom_colors = ["#FF0000", "#1b5c0c", "#FFA500","#0000FF"]
-    colors = custom_colors[c % len(custom_colors)]
+    custom_colors = ["#FF0000", "#1b5c0c", "#FFA500", "#0000FF"]
+    colors = custom_colors
 
     for c in range(channels):
         label = channel_names[c] if c < len(channel_names) else f"ch{c}"
-        color = colors(c)
+        color = colors[c % len(colors)]
         ax.plot(
             x,
             original_obs[:, c],
@@ -727,12 +753,100 @@ def plot_counterfactual_timeseries(
 
     ax.set_xlabel("Minutes in observation window")
     ax.set_ylabel("Flux (pfu)")
+    ax.set_yscale("log")
+    positive_values = np.concatenate(
+        [
+            np.asarray(original_obs, dtype=np.float64).ravel(),
+            np.asarray(cf_recon, dtype=np.float64).ravel(),
+        ]
+    )
+    positive_values = positive_values[np.isfinite(positive_values) & (positive_values > 0)]
+    if positive_values.size > 0:
+        y_min = min(1e-2, float(np.min(positive_values)))
+        y_max = float(np.max(positive_values))
+        if y_max <= y_min:
+            y_max = y_min * 10.0
+        tick_candidates = np.array([0.1, 0.5, 1.0, y_max], dtype=np.float64)
+        tick_candidates = tick_candidates[(tick_candidates >= y_min) & (tick_candidates <= y_max)]
+        if tick_candidates.size == 0:
+            tick_candidates = np.array([y_min, y_max], dtype=np.float64)
+        ax.set_ylim(bottom=y_min, top=y_max)
+        ax.set_yticks(np.unique(np.round(tick_candidates, 6)))
+    ax.yaxis.set_major_formatter(plt.ScalarFormatter())
     ax.grid(True, alpha=0.25)
     ax.legend(frameon=False, fontsize=8, ncol=2, loc="upper right")
     fig.suptitle(
         f"Counterfactual Time Series | sample={sample_id} | {label_name} -> {target_label_name} | "
         f"best model: lag={int(lag)}, window={int(window_size)}, top%={int(top_percent_key)} | "
         f"orig recon MSE={original_mse:.3e} | cf recon MSE={counterfactual_mse:.3e}",
+        fontsize=12,
+        y=0.995,
+    )
+    plt.tight_layout(rect=[0, 0, 1, 0.96])
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    plt.savefig(output_path, dpi=220, bbox_inches="tight")
+    plt.close(fig)
+
+
+def plot_counterfactual_channel_timeseries(
+    sample_id: str,
+    label_name: str,
+    target_label_name: str,
+    channel_name: str,
+    original_obs_channel: np.ndarray,
+    cf_recon_channel: np.ndarray,
+    lag: int,
+    window_size: int,
+    top_percent_key: int,
+    counterfactual_mse: float,
+    output_path: Path,
+):
+    fig, ax = plt.subplots(1, 1, figsize=(12, 4.8))
+    x = np.arange(original_obs_channel.shape[0], dtype=np.int64)
+
+    ax.plot(
+        x,
+        original_obs_channel,
+        color="#1f77b4",
+        linewidth=1.8,
+        label=f"{channel_name} original",
+    )
+    ax.plot(
+        x,
+        cf_recon_channel,
+        color="#d62728",
+        linewidth=1.8,
+        linestyle="--",
+        label=f"{channel_name} counterfactual",
+    )
+    ax.set_xlabel("Minutes in observation window")
+    ax.set_ylabel("Flux (pfu)")
+    ax.set_yscale("log")
+    positive_values = np.concatenate(
+        [
+            np.asarray(original_obs_channel, dtype=np.float64).ravel(),
+            np.asarray(cf_recon_channel, dtype=np.float64).ravel(),
+        ]
+    )
+    positive_values = positive_values[np.isfinite(positive_values) & (positive_values > 0)]
+    if positive_values.size > 0:
+        y_min = min(1e-2, float(np.min(positive_values)))
+        y_max = float(np.max(positive_values))
+        if y_max <= y_min:
+            y_max = y_min * 10.0
+        tick_candidates = np.array([0.1, 0.5, 1.0, y_max], dtype=np.float64)
+        tick_candidates = tick_candidates[(tick_candidates >= y_min) & (tick_candidates <= y_max)]
+        if tick_candidates.size == 0:
+            tick_candidates = np.array([y_min, y_max], dtype=np.float64)
+        ax.set_ylim(bottom=y_min, top=y_max)
+        ax.set_yticks(np.unique(np.round(tick_candidates, 6)))
+    ax.yaxis.set_major_formatter(plt.ScalarFormatter())
+    ax.grid(True, alpha=0.25)
+    ax.legend(frameon=False, fontsize=9, loc="best")
+    fig.suptitle(
+        f"Counterfactual Time Series | sample={sample_id} | channel={channel_name} | "
+        f"{label_name} -> {target_label_name} | best model: lag={int(lag)}, "
+        f"window={int(window_size)}, top%={int(top_percent_key)} | cf recon MSE={counterfactual_mse:.3e}",
         fontsize=12,
         y=0.995,
     )
@@ -754,6 +868,7 @@ def generate_counterfactual_reports(
     output_dir: Path,
     run_stamp: str,
     random_state: int = 42,
+    chosen_sample_ids: list[str] | None = None,
 ) -> pd.DataFrame:
     if len(classes) != 2:
         raise ValueError("Experiment 16 counterfactual generation currently expects a binary classification task.")
@@ -777,6 +892,7 @@ def generate_counterfactual_reports(
         model=model,
         classes=classes,
         num_per_class=2,
+        chosen_sample_ids=chosen_sample_ids,
     )
 
     dice = make_dice_explainer(
@@ -857,9 +973,9 @@ def generate_counterfactual_reports(
             counterfactual_mse = float(np.mean((original_obs - cf_recon) ** 2))
             counterfactual_mae = float(np.mean(np.abs(original_obs - cf_recon)))
 
-            plot_path = output_dir / (
+            combined_plot_path = output_dir / "combined" / (
                 f"experiment16_cf_sample_{sample_id}_lag{lag}_w{fft_window_size}_"
-                f"top{int(artifact['top_percent_key'])}_{label_name}_to_{target_label_name}_{run_stamp}.png"
+                f"top{int(artifact['top_percent_key'])}_{label_name}_to_{target_label_name}_{run_stamp}_combined.png"
             )
             plot_counterfactual_timeseries(
                 sample_id=sample_id,
@@ -874,8 +990,29 @@ def generate_counterfactual_reports(
                 top_percent_key=int(artifact["top_percent_key"]),
                 original_mse=original_mse,
                 counterfactual_mse=counterfactual_mse,
-                output_path=plot_path,
+                output_path=combined_plot_path,
             )
+            for c in range(channels):
+                channel_label = channel_names[c] if c < len(channel_names) else f"ch{c}"
+                channel_plot_path = output_dir / "channels" / (
+                    f"experiment16_cf_sample_{sample_id}_lag{lag}_w{fft_window_size}_"
+                    f"top{int(artifact['top_percent_key'])}_{channel_label}_{label_name}_"
+                    f"to_{target_label_name}_{run_stamp}.png"
+                )
+                channel_mse = float(np.mean((original_obs[:, c] - cf_recon[:, c]) ** 2))
+                plot_counterfactual_channel_timeseries(
+                    sample_id=sample_id,
+                    label_name=label_name,
+                    target_label_name=target_label_name,
+                    channel_name=channel_label,
+                    original_obs_channel=original_obs[:, c],
+                    cf_recon_channel=cf_recon[:, c],
+                    lag=lag,
+                    window_size=fft_window_size,
+                    top_percent_key=int(artifact["top_percent_key"]),
+                    counterfactual_mse=channel_mse,
+                    output_path=channel_plot_path,
+                )
             cf_generated = True
         except Exception as exc:
             cf_prediction = int(example["predicted_label"])
@@ -949,7 +1086,8 @@ def main():
     fft_window_sizes = [45, 90, 180, 360]
     forecast_lags = [5, 15, 30, 60, 120]
     top_percents = [0.05, 0.10, 0.15, 0.25, 0.50, 1.00]
-
+    #chosen_counterfactual_files: list[str] = ["2003-07-05_23-06.csv","2010-05-05_10-37.csv",                                              "2003-10-28_00-15.csv","2011-11-25_23-25.csv"]
+    chosen_counterfactual_files: list[str] =[]
     output_dir = data_root / "reports" / "experiment16"
     output_dir.mkdir(parents=True, exist_ok=True)
     cached_run = find_best_cached_run(output_dir)
@@ -1047,7 +1185,7 @@ def main():
             )
             best_artifacts_by_lag.append(artifact)
 
-    counterfactual_plot_dir = output_dir / "counterfactual_timeseries"
+    counterfactual_plot_dir = output_dir / "counterfactual_timeseries" / stamp
     counterfactual_summary_path = output_dir / f"experiment16_counterfactual_summary_{stamp}.csv"
     counterfactual_frames: list[pd.DataFrame] = []
     for artifact in best_artifacts_by_lag:
@@ -1064,6 +1202,7 @@ def main():
                 output_dir=counterfactual_plot_dir,
                 run_stamp=stamp,
                 random_state=42,
+                chosen_sample_ids=chosen_counterfactual_files,
             )
         )
     counterfactual_df = pd.concat(counterfactual_frames, axis=0, ignore_index=True) if counterfactual_frames else pd.DataFrame()
