@@ -9,7 +9,7 @@ For each forecast lag:
    - train one RandomForest model for that lag/top% pair,
    - evaluate and save outputs.
 
-Outputs are intentionally overwritten on each run.
+Outputs are timestamped on each run.
 """
 
 from __future__ import annotations
@@ -772,27 +772,19 @@ def run_lag_window_concatenated_top_percent_experiment(
     return pd.DataFrame(results_rows), pd.DataFrame(selection_rows), model_artifacts
 
 
-def save_model_artifacts(model_artifacts: list[dict], output_dir: Path) -> list[Path]:
+def save_model_artifacts(model_artifacts: list[dict], output_dir: Path, run_stamp: str) -> list[Path]:
     output_dir.mkdir(parents=True, exist_ok=True)
     saved_paths: list[Path] = []
 
     for artifact in model_artifacts:
         lag = int(artifact["forecast_lag_min"])
         top_key = int(artifact["top_percent_key"])
-        path = output_dir / f"experiment14_rf_lag{lag}_top{top_key}.pkl"
+        path = output_dir / f"experiment14_rf_lag{lag}_top{top_key}_{run_stamp}.pkl"
         with open(path, "wb") as f:
             pickle.dump(artifact, f)
         saved_paths.append(path)
 
     return saved_paths
-
-
-def remove_matching_files(directory: Path, pattern: str):
-    if not directory.exists():
-        return
-    for path in directory.glob(pattern):
-        if path.is_file():
-            path.unlink()
 
 
 def main():
@@ -845,17 +837,17 @@ def main():
 
     output_dir = data_root / "reports" / "experiment14"
     output_dir.mkdir(parents=True, exist_ok=True)
+    stamp = pd.Timestamp.now().strftime("%Y%m%d_%H%M%S")
 
-    results_path = output_dir / "experiment14_lag_models_concatenated_windows_results.csv"
-    selection_path = output_dir / "experiment14_window_selection_details.csv"
+    results_path = output_dir / f"experiment14_lag_models_concatenated_windows_results_{stamp}.csv"
+    selection_path = output_dir / f"experiment14_window_selection_details_{stamp}.csv"
     results_df.to_csv(results_path, index=False)
     selection_df.to_csv(selection_path, index=False)
 
     models_dir = output_dir / "saved_models"
-    remove_matching_files(models_dir, "experiment14_rf_*.pkl")
-    saved_model_paths = save_model_artifacts(model_artifacts, models_dir)
+    saved_model_paths = save_model_artifacts(model_artifacts, models_dir, run_stamp=stamp)
 
-    summary_plot_path = output_dir / "experiment14_lag_toppercent_training_summary.png"
+    summary_plot_path = output_dir / f"experiment14_lag_toppercent_training_summary_{stamp}.png"
     plot_lag_toppercent_training_summary(
         results_df=results_df,
         event_index=event_onset_index,
@@ -863,7 +855,7 @@ def main():
         output_path=summary_plot_path,
     )
 
-    feature_importance_grid_path = output_dir / "experiment14_feature_importance_line_grid_5x5.png"
+    feature_importance_grid_path = output_dir / f"experiment14_feature_importance_line_grid_5x5_{stamp}.png"
     plot_feature_importance_line_grid(
         model_artifacts=model_artifacts,
         results_df=results_df,
@@ -872,11 +864,12 @@ def main():
         output_path=feature_importance_grid_path,
     )
 
-    half_importance_plot_path = output_dir / "experiment14_features_required_cumimp_gt50_by_lag_toppercent.png"
+    half_importance_plot_path = output_dir / f"experiment14_features_required_cumimp_gt50_by_lag_toppercent_{stamp}.png"
     plot_features_needed_for_half_importance(results_df, half_importance_plot_path)
 
     print("\n" + "=" * 80)
     print("Experiment 14 (lag-wise models from per-window top-percent concat) finished.")
+    print(f"Run timestamp: {stamp}")
     print(f"Saved results CSV: {results_path}")
     print(f"Saved lag-selection CSV: {selection_path}")
     print(f"Saved lag/top% training summary plot: {summary_plot_path}")
