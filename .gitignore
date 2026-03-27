@@ -1,5 +1,6 @@
 # Local/raw datasets should stay on disk but out of version control.
 data/raw/
+.venv/
 
 # macOS Finder metadata
 .DS_Store

@@ -774,9 +774,9 @@ def plot_feature_importance_line_grid(
         )
 
     if normalize_by_window:
-        title = "Experiment 15: Normalized feature-importance lines (importance / #selected-features in source window)"
+        title = "Normalized feature-importance lines (importance / #selected-features in source window)"
     else:
-        title = "Experiment 15: Feature importance lines (5x5) with window-segment shading"
+        title = "Feature importance lines (5x5) with window-segment shading"
     fig.suptitle(title, fontsize=12)
     fig.legend(handles=legend_handles, loc="upper center", bbox_to_anchor=(0.5, 0.995), ncol=max(2, len(legend_handles)), frameon=False, fontsize=9)
     plt.tight_layout(rect=[0, 0, 1, 0.96])
@@ -962,7 +962,7 @@ def plot_feature_importance_individual_models_by_lag(
                 f"normalized_by_window_feature_count{suffix}.png"
             )
         else:
-            title = f"Experiment 15: Lag {lag} feature importance by model"
+            title = f"Lag {lag} feature importance by model"
             file_name = f"experiment15_lag{int(lag)}_feature_importance_by_model{suffix}.png"
 
         fig.suptitle(title, fontsize=12)
@@ -1292,91 +1292,6 @@ def plot_global_explainability_by_lag(
 
         plt.tight_layout()
         save_path = output_dir / f"experiment15_global_explainability_lag{int(lag)}{suffix}.png"
-        plt.savefig(save_path, dpi=220, bbox_inches="tight")
-        plt.close()
-        saved_paths.append(save_path)
-
-    return saved_paths
-
-
-def plot_global_explainability_all_combinations_by_channel(
-    channel_importance_df: pd.DataFrame,
-    output_dir: Path,
-    channel_order: list[str] | None = None,
-    importance_col: str = "importance_share_total_norm_by_window_feature_count",
-    filename_suffix: str | None = None,
-) -> list[Path]:
-    """Plot per-channel global explainability over all (lag, top%) combinations."""
-    if len(channel_importance_df) == 0:
-        return []
-
-    required = {"forecast_lag_min", "top_percent", "channel_name", importance_col}
-    if not required.issubset(set(channel_importance_df.columns)):
-        return []
-
-    df = channel_importance_df.copy()
-    available_channels = set(df["channel_name"].astype(str).unique().tolist())
-    if channel_order:
-        channels = [str(ch) for ch in channel_order if str(ch) in available_channels]
-    else:
-        channels = sorted(available_channels)
-    if not channels:
-        return []
-
-    top_percents = sorted(df["top_percent"].astype(float).unique().tolist())
-    lags = sorted(df["forecast_lag_min"].astype(int).unique().tolist())
-    if not top_percents or not lags:
-        return []
-
-    combos = [(int(lag), float(frac)) for lag in lags for frac in top_percents]
-    combo_labels = [f"lag{lag}_top{int(round(frac * 100.0))}%" for lag, frac in combos]
-    x = np.arange(len(combos), dtype=np.int64)
-
-    output_dir.mkdir(parents=True, exist_ok=True)
-    suffix = f"_{filename_suffix}" if filename_suffix else ""
-    saved_paths: list[Path] = []
-
-    color_map = {
-        "p3": "#1f77b4",
-        "p5": "#ff7f0e",
-        "p7": "#2ca02c",
-        "long_xray": "#d62728",
-    }
-
-    for channel_name in channels:
-        ch_df = df[df["channel_name"].astype(str) == str(channel_name)].copy()
-        if len(ch_df) == 0:
-            continue
-
-        lookup = {
-            (int(row["forecast_lag_min"]), float(row["top_percent"])): float(row[importance_col])
-            for _, row in ch_df.iterrows()
-        }
-        y_vals = [lookup.get((lag, frac), np.nan) for lag, frac in combos]
-
-        fig_w = max(11.0, 0.40 * float(len(combos)))
-        fig, ax = plt.subplots(figsize=(fig_w, 4.6))
-        short = channel_short_name(channel_name)
-        ax.plot(
-            x,
-            y_vals,
-            marker="o",
-            linewidth=1.8,
-            color=color_map.get(short, "#7f7f7f"),
-        )
-        ax.set_ylim(0.0, 1.0)
-        ax.set_xticks(x)
-        ax.set_xticklabels(combo_labels, rotation=70, ha="right")
-        ax.set_xlabel("(lag, top%) combination")
-        ax.set_ylabel("relative normalized importance share")
-        ax.set_title(
-            f"Global explainability combinations: {short} channel "
-            "(all lags, all top-k)"
-        )
-        ax.grid(True, alpha=0.25)
-
-        plt.tight_layout()
-        save_path = output_dir / f"experiment15_global_explainability_all_combos_{short}{suffix}.png"
         plt.savefig(save_path, dpi=220, bbox_inches="tight")
         plt.close()
         saved_paths.append(save_path)
@@ -2016,14 +1931,6 @@ def main():
         importance_col="importance_share_total_norm_by_window_feature_count",
         filename_suffix=stamp,
     )
-    global_explainability_combos_dir = output_dir / "global_explainability_all_combinations_by_channel"
-    global_explainability_combos_paths = plot_global_explainability_all_combinations_by_channel(
-        channel_importance_df=channel_importance_df,
-        output_dir=global_explainability_combos_dir,
-        channel_order=target_channels,
-        importance_col="importance_share_total_norm_by_window_feature_count",
-        filename_suffix=stamp,
-    )
     global_explainability_timeline_dir = output_dir / "global_explainability_timeline_by_lag"
     global_explainability_timeline_paths = plot_global_explainability_timeline_by_lag(
         model_artifacts=model_artifacts,
@@ -2060,10 +1967,6 @@ def main():
     print(
         f"Saved global explainability per-lag plots: "
         f"{len(global_explainability_by_lag_paths)} files in {global_explainability_by_lag_dir}"
-    )
-    print(
-        f"Saved global explainability all-combination channel plots: "
-        f"{len(global_explainability_combos_paths)} files in {global_explainability_combos_dir}"
     )
     print(
         f"Saved global explainability timeline-by-lag plots: "
