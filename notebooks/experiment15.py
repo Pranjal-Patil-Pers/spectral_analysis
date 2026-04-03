@@ -714,9 +714,17 @@ def plot_feature_importance_line_grid(
                 if count <= 0:
                     continue
                 end = start + count
-                ax.axvspan(start, max(start, end - 1), color=window_colors[i % len(window_colors)], alpha=0.35, linewidth=0)
+                # Add light, non-overlapping window shading
+                ax.axvspan(
+                    start,
+                    end,
+                    color=window_colors[i % len(window_colors)],
+                    alpha=0.18,
+                    linewidth=0,
+                    zorder=0,
+                )
                 if start > 0:
-                    ax.axvline(start, color="#6f6f6f", linewidth=0.6, alpha=0.9)
+                    ax.axvline(start, color="#6f6f6f", linewidth=0.6, alpha=0.6, zorder=1)
                 start = end
 
             plot_values = importances
@@ -736,17 +744,17 @@ def plot_feature_importance_line_grid(
             ax.grid(True, axis="y", alpha=0.2)
             ax.tick_params(labelsize=7)
 
-            if r == 0:
-                ax.set_title(f"top {top_key}%", fontsize=10)
+            window_counts = [int(len(selected_idx_by_window.get(int(window), []))) for window in windows]
+            counts_label = " ".join([f"w{int(window)}:{count}" for window, count in zip(windows, window_counts)])
+            ax.set_title(
+                f"top {top_key}% | n={int(importances.size)} | {counts_label}",
+                fontsize=9,
+            )
+            # shared labels handled at figure level
             if c == 0:
-                ylabel = (
-                    "importance / #selected-features in window"
-                    if normalize_by_window
-                    else "importance"
-                )
-                ax.set_ylabel(f"lag {lag}\n{ylabel}", fontsize=8)
+                ax.set_ylabel("")
             if r == nrows - 1:
-                ax.set_xlabel("feature idx", fontsize=8)
+                ax.set_xlabel("")
 
             val_test = summary_map.get((int(lag), int(top_key)))
             if val_test is not None:
@@ -775,11 +783,15 @@ def plot_feature_importance_line_grid(
 
     if normalize_by_window:
         title = "Normalized feature-importance lines (importance / #selected-features in source window)"
+        y_label = "importance / #selected-features in window"
     else:
         title = "Feature importance lines (5x5) with window-segment shading"
-    fig.suptitle(title, fontsize=12)
-    fig.legend(handles=legend_handles, loc="upper center", bbox_to_anchor=(0.5, 0.995), ncol=max(2, len(legend_handles)), frameon=False, fontsize=9)
-    plt.tight_layout(rect=[0, 0, 1, 0.96])
+        y_label = "importance"
+    fig.suptitle(title, fontsize=12, y=0.99)
+    fig.supxlabel("feature idx", fontsize=10)
+    fig.supylabel(y_label, fontsize=10)
+    fig.legend(handles=legend_handles, loc="upper center", bbox_to_anchor=(0.5, 0.97), ncol=max(2, len(legend_handles)), frameon=False, fontsize=9)
+    plt.tight_layout(rect=[0, 0, 1, 0.93])
     output_path.parent.mkdir(parents=True, exist_ok=True)
     plt.savefig(output_path, dpi=220, bbox_inches="tight")
     plt.close()
@@ -875,13 +887,14 @@ def plot_feature_importance_individual_models_by_lag(
                 end = start + count
                 ax.axvspan(
                     start,
-                    max(start, end - 1),
+                    end,
                     color=window_colors[i % len(window_colors)],
-                    alpha=0.35,
+                    alpha=0.18,
                     linewidth=0,
+                    zorder=0,
                 )
                 if start > 0:
-                    ax.axvline(start, color="#6f6f6f", linewidth=0.6, alpha=0.9)
+                    ax.axvline(start, color="#6f6f6f", linewidth=0.6, alpha=0.6, zorder=1)
                 start = end
 
             plot_values = importances
@@ -900,16 +913,17 @@ def plot_feature_importance_individual_models_by_lag(
             ax.set_xlim(0, max(1, int(importances.size - 1)))
             ax.grid(True, axis="y", alpha=0.2)
             ax.tick_params(labelsize=7)
-            ax.set_title(f"lag {lag} | top {top_key}% | n={int(importances.size)}", fontsize=9)
+            window_counts = [int(len(selected_idx_by_window.get(int(window), []))) for window in windows]
+            counts_label = ", ".join([f"w{int(window)}:{count}" for window, count in zip(windows, window_counts)])
+            ax.set_title(
+                f"lag {lag} | top {top_key}% | n={int(importances.size)} | {counts_label}",
+                fontsize=9,
+            )
+            # shared labels handled at figure level
             if c == 0:
-                ylabel = (
-                    "importance / #selected-features in window"
-                    if normalize_by_window
-                    else "importance"
-                )
-                ax.set_ylabel(ylabel, fontsize=8)
+                ax.set_ylabel("")
             if r == nrows - 1:
-                ax.set_xlabel("feature idx", fontsize=8)
+                ax.set_xlabel("")
 
             val_test = summary_map.get((int(lag), int(top_key)))
             if val_test is not None:
@@ -965,16 +979,21 @@ def plot_feature_importance_individual_models_by_lag(
             title = f"Lag {lag} feature importance by model"
             file_name = f"experiment15_lag{int(lag)}_feature_importance_by_model{suffix}.png"
 
-        fig.suptitle(title, fontsize=12)
+        fig.suptitle(title, fontsize=12, y=0.985)
+        fig.supxlabel("feature idx", fontsize=10)
+        fig.supylabel(
+            "importance / #selected-features in window" if normalize_by_window else "importance",
+            fontsize=10,
+        )
         fig.legend(
             handles=legend_handles,
             loc="upper center",
-            bbox_to_anchor=(0.5, 0.995),
+            bbox_to_anchor=(0.5, 0.965),
             ncol=max(2, len(legend_handles)),
             frameon=False,
             fontsize=9,
         )
-        plt.tight_layout(rect=[0, 0, 1, 0.95])
+        plt.tight_layout(rect=[0, 0, 1, 0.90])
         save_path = output_dir / file_name
         plt.savefig(save_path, dpi=220, bbox_inches="tight")
         plt.close()
