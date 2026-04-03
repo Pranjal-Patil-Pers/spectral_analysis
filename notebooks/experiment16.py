@@ -5,7 +5,7 @@ Experiment 16:
 - Select top-k% features inside that single window-specific model.
 - Train one RandomForest per (lag, window, top%).
 - Plot all lag/window/top% results and select the best model by validation priority.
-- Generate DiCE counterfactuals for 2 training examples per class on the best model.
+- Generate DiCE counterfactuals for 2 test examples per class on the best model.
 - Reconstruct original and counterfactual FFT features back to time series via inverse FFT.
 - Plot original vs. reconstructed-via-counterfactual time series and report reconstruction errors.
 """
@@ -609,7 +609,7 @@ def reconstruct_observation_from_fft_features(
 
 def build_best_model_feature_bank(
     artifact: dict,
-    X_train: list[np.ndarray],
+    X_data: list[np.ndarray],
     event_index: int,
     observation_window_size: int,
 ) -> dict[str, np.ndarray | int]:
@@ -617,7 +617,7 @@ def build_best_model_feature_bank(
     fft_window_size = int(artifact["window_size"])
 
     X_train_all, max_coeffs, n_slices, channels = build_fft_features_all(
-        X_train,
+        X_data,
         fft_window_size=fft_window_size,
         event_index=event_index,
         observation_window_size=observation_window_size,
@@ -633,54 +633,60 @@ def build_best_model_feature_bank(
 
 
 def choose_training_examples_for_counterfactuals(
-    X_train_sel: np.ndarray,
-    y_train: np.ndarray,
-    train_ids: list[str],
+    X_examples_sel: np.ndarray,
+    y_examples: np.ndarray,
+    example_ids: list[str],
     model: RandomForestClassifier,
     classes: np.ndarray,
     num_per_class: int = 2,
     chosen_sample_ids: list[str] | None = None,
 ) -> list[dict[str, int | str]]:
-    preds = model.predict(X_train_sel)
+    preds = model.predict(X_examples_sel)
     chosen: list[dict[str, int | str]] = []
-    requested_ids = [str(sample_id) for sample_id in (chosen_sample_ids or []) if str(sample_id).strip()]
+    requested_ids = [
+        str(Path(str(sample_id).strip()).stem)
+        for sample_id in (chosen_sample_ids or [])
+        if str(sample_id).strip()
+    ]
 
     if requested_ids:
-        train_id_to_index = {str(sample_id): idx for idx, sample_id in enumerate(train_ids)}
-        missing_ids = [sample_id for sample_id in requested_ids if sample_id not in train_id_to_index]
+        example_id_to_index = {
+            str(Path(str(sample_id)).stem): idx for idx, sample_id in enumerate(example_ids)
+        }
+        missing_ids = [sample_id for sample_id in requested_ids if sample_id not in example_id_to_index]
         if missing_ids:
             raise ValueError(
-                "Chosen counterfactual example file(s) were not found in the training split: "
+                "Chosen counterfactual example file(s) were not found in the example split: "
                 + ", ".join(missing_ids)
             )
 
         for sample_id in requested_ids:
-            idx = int(train_id_to_index[sample_id])
+            idx = int(example_id_to_index[sample_id])
             chosen.append(
                 {
-                    "train_index": int(idx),
-                    "sample_id": str(train_ids[int(idx)]),
-                    "label": int(y_train[int(idx)]),
-                    "label_name": str(classes[int(y_train[int(idx)])]),
+                    "example_index": int(idx),
+                    "sample_id": str(example_ids[int(idx)]),
+                    "label": int(y_examples[int(idx)]),
+                    "label_name": str(classes[int(y_examples[int(idx)])]),
                     "predicted_label": int(preds[int(idx)]),
                     "predicted_label_name": str(classes[int(preds[int(idx)])]),
                 }
             )
         return chosen
 
-    for cls_idx in sorted(np.unique(y_train).tolist()):
-        cls_mask = y_train == int(cls_idx)
-        correct_idx = np.where(cls_mask & (preds == y_train))[0].tolist()
+    for cls_idx in sorted(np.unique(y_examples).tolist()):
+        cls_mask = y_examples == int(cls_idx)
+        correct_idx = np.where(cls_mask & (preds == y_examples))[0].tolist()
         fallback_idx = np.where(cls_mask)[0].tolist()
         source = correct_idx if len(correct_idx) >= int(num_per_class) else fallback_idx
 
         for idx in source[: int(num_per_class)]:
             chosen.append(
                 {
-                    "train_index": int(idx),
-                    "sample_id": str(train_ids[int(idx)]),
-                    "label": int(y_train[int(idx)]),
-                    "label_name": str(classes[int(y_train[int(idx)])]),
+                    "example_index": int(idx),
+                    "sample_id": str(example_ids[int(idx)]),
+                    "label": int(y_examples[int(idx)]),
+                    "label_name": str(classes[int(y_examples[int(idx)])]),
                     "predicted_label": int(preds[int(idx)]),
                     "predicted_label_name": str(classes[int(preds[int(idx)])]),
                 }
@@ -860,7 +866,9 @@ def generate_counterfactual_reports(
     artifact: dict,
     X_train: list[np.ndarray],
     y_train: np.ndarray,
-    train_ids: list[str],
+    X_examples: list[np.ndarray],
+    y_examples: np.ndarray,
+    example_ids: list[str],
     classes: np.ndarray,
     channel_names: list[str],
     event_index: int,
@@ -873,22 +881,30 @@ def generate_counterfactual_reports(
     if len(classes) != 2:
         raise ValueError("Experiment 16 counterfactual generation currently expects a binary classification task.")
 
-    feature_bank = build_best_model_feature_bank(
+    train_feature_bank = build_best_model_feature_bank(
         artifact=artifact,
-        X_train=X_train,
+        X_data=X_train,
         event_index=event_index,
         observation_window_size=observation_window_size,
     )
-    X_train_flat = np.asarray(feature_bank["X_train_flat"], dtype=np.float32)
+    example_feature_bank = build_best_model_feature_bank(
+        artifact=artifact,
+        X_data=X_examples,
+        event_index=event_index,
+        observation_window_size=observation_window_size,
+    )
+    X_train_flat = np.asarray(train_feature_bank["X_train_flat"], dtype=np.float32)
+    X_examples_flat = np.asarray(example_feature_bank["X_train_flat"], dtype=np.float32)
     selected_idx = np.asarray(artifact["selected_feature_indices"], dtype=np.int64)
     X_train_sel = X_train_flat[:, selected_idx]
+    X_examples_sel = X_examples_flat[:, selected_idx]
     feature_names = list(artifact["selected_feature_names"])
     model = artifact["model"]
 
     chosen_examples = choose_training_examples_for_counterfactuals(
-        X_train_sel=X_train_sel,
-        y_train=y_train,
-        train_ids=train_ids,
+        X_examples_sel=X_examples_sel,
+        y_examples=y_examples,
+        example_ids=example_ids,
         model=model,
         classes=classes,
         num_per_class=2,
@@ -903,19 +919,19 @@ def generate_counterfactual_reports(
     )
 
     rows: list[dict[str, float | int | str]] = []
-    channels = int(feature_bank["channels"])
-    n_slices = int(feature_bank["n_slices"])
-    max_coeffs = int(feature_bank["max_coeffs"])
+    channels = int(train_feature_bank["channels"])
+    n_slices = int(train_feature_bank["n_slices"])
+    max_coeffs = int(train_feature_bank["max_coeffs"])
     fft_window_size = int(artifact["window_size"])
     lag = int(artifact["forecast_lag_min"])
 
     for example in chosen_examples:
-        idx = int(example["train_index"])
+        idx = int(example["example_index"])
         sample_id = str(example["sample_id"])
         label = int(example["label"])
         label_name = str(example["label_name"])
-        original_full = X_train_flat[idx].astype(np.float64).copy()
-        original_sel = X_train_sel[idx].astype(np.float64).copy()
+        original_full = X_examples_flat[idx].astype(np.float64).copy()
+        original_sel = X_examples_sel[idx].astype(np.float64).copy()
         query_df = pd.DataFrame([original_sel], columns=feature_names)
 
         cf_generated = False
@@ -949,7 +965,7 @@ def generate_counterfactual_reports(
             cf_full[selected_idx] = cf_selected
 
             original_obs = extract_observation_window(
-                X_train[idx],
+                X_examples[idx],
                 event_index=event_index,
                 observation_window_size=observation_window_size,
                 lag_minute=lag,
@@ -1079,7 +1095,7 @@ def main():
         label_col="Label",
         feature_cols=target_channels,
     )
-    (X_train, y_train, train_ids), (X_val, y_val, _), (X_test, y_test, _) = get_splits_with_ids(dataset)
+    (X_train, y_train, train_ids), (X_val, y_val, _), (X_test, y_test, test_ids) = get_splits_with_ids(dataset)
 
     event_onset_index = 720
     observation_window_size = 360
@@ -1194,7 +1210,9 @@ def main():
                 artifact=artifact,
                 X_train=X_train,
                 y_train=y_train,
-                train_ids=train_ids,
+                X_examples=X_test,
+                y_examples=y_test,
+                example_ids=test_ids,
                 classes=dataset.classes_,
                 channel_names=target_channels,
                 event_index=event_onset_index,
