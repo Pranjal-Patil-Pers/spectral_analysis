@@ -485,14 +485,14 @@ def plot_toppercent_performance_by_lag(
         ax.set_xticklabels(x_labels)
         ax.set_ylim(0.0, 1.0)
         ax.grid(True, alpha=0.25)
-        if lag_idx == 0:
-            ax.legend(frameon=False, fontsize=9, loc="best")
 
     for ax in flat_axes[len(lags):]:
         ax.axis("off")
 
+    handles, labels = flat_axes[0].get_legend_handles_labels()
+    fig.legend(handles, labels, loc="upper center", bbox_to_anchor=(0.5, 0.92), frameon=False, fontsize=9, ncol=len(handles))
     fig.suptitle(f"Experiment 16: {metric_col.upper()} by lag and window", fontsize=12, y=0.995)
-    plt.tight_layout(rect=[0, 0, 1, 0.96])
+    plt.tight_layout(rect=[0, 0, 1, 0.88])
     output_path.parent.mkdir(parents=True, exist_ok=True)
     plt.savefig(output_path, dpi=220, bbox_inches="tight")
     plt.close(fig)
@@ -551,14 +551,14 @@ def plot_toppercent_performance_by_window(
         ax.set_xticklabels(x_labels)
         ax.set_ylim(0.0, 1.0)
         ax.grid(True, alpha=0.25)
-        if win_idx == 0:
-            ax.legend(frameon=False, fontsize=9, loc="best")
 
     for ax in flat_axes[len(windows):]:
         ax.axis("off")
 
+    handles, labels = flat_axes[0].get_legend_handles_labels()
+    fig.legend(handles, labels, loc="upper center", bbox_to_anchor=(0.5, 0.92), frameon=False, fontsize=9, ncol=len(handles))
     fig.suptitle(f"Experiment 16: {metric_col.upper()} by window and lag", fontsize=12, y=0.995)
-    plt.tight_layout(rect=[0, 0, 1, 0.96])
+    plt.tight_layout(rect=[0, 0, 1, 0.88])
     output_path.parent.mkdir(parents=True, exist_ok=True)
     plt.savefig(output_path, dpi=220, bbox_inches="tight")
     plt.close(fig)
@@ -760,27 +760,17 @@ def plot_counterfactual_timeseries(
     ax.set_xlabel("Minutes in observation window")
     ax.set_ylabel("Flux (pfu)")
     ax.set_yscale("log")
-    positive_values = np.concatenate(
-        [
-            np.asarray(original_obs, dtype=np.float64).ravel(),
-            np.asarray(cf_recon, dtype=np.float64).ravel(),
-        ]
-    )
-    positive_values = positive_values[np.isfinite(positive_values) & (positive_values > 0)]
-    if positive_values.size > 0:
-        y_min = min(1e-2, float(np.min(positive_values)))
-        y_max = float(np.max(positive_values))
-        if y_max <= y_min:
-            y_max = y_min * 10.0
-        tick_candidates = np.array([0.1, 0.5, 1.0, y_max], dtype=np.float64)
-        tick_candidates = tick_candidates[(tick_candidates >= y_min) & (tick_candidates <= y_max)]
-        if tick_candidates.size == 0:
-            tick_candidates = np.array([y_min, y_max], dtype=np.float64)
+    cf_values = np.asarray(cf_recon, dtype=np.float64).ravel()
+    cf_values = cf_values[np.isfinite(cf_values) & (cf_values > 0)]
+    if cf_values.size > 0:
+        y_min = float(np.min(cf_values)) / 1.2
+        y_max = float(np.max(cf_values)) * 1.2
         ax.set_ylim(bottom=y_min, top=y_max)
-        ax.set_yticks(np.unique(np.round(tick_candidates, 6)))
+        ax.set_yticks(np.unique(np.round([y_min, y_max], 6)))
     ax.yaxis.set_major_formatter(plt.ScalarFormatter())
     ax.grid(True, alpha=0.25)
-    ax.legend(frameon=False, fontsize=8, ncol=2, loc="upper right")
+    handles, labels = ax.get_legend_handles_labels()
+    fig.legend(handles, labels, loc="upper center", bbox_to_anchor=(0.5, 0.92), frameon=False, fontsize=8, ncol=4)
     fig.suptitle(
         f"Counterfactual Time Series | sample={sample_id} | {label_name} -> {target_label_name} | "
         f"best model: lag={int(lag)}, window={int(window_size)}, top%={int(top_percent_key)} | "
@@ -788,7 +778,7 @@ def plot_counterfactual_timeseries(
         fontsize=12,
         y=0.995,
     )
-    plt.tight_layout(rect=[0, 0, 1, 0.96])
+    plt.tight_layout(rect=[0, 0, 1, 0.88])
     output_path.parent.mkdir(parents=True, exist_ok=True)
     plt.savefig(output_path, dpi=220, bbox_inches="tight")
     plt.close(fig)
@@ -828,27 +818,17 @@ def plot_counterfactual_channel_timeseries(
     ax.set_xlabel("Minutes in observation window")
     ax.set_ylabel("Flux (pfu)")
     ax.set_yscale("log")
-    positive_values = np.concatenate(
-        [
-            np.asarray(original_obs_channel, dtype=np.float64).ravel(),
-            np.asarray(cf_recon_channel, dtype=np.float64).ravel(),
-        ]
-    )
-    positive_values = positive_values[np.isfinite(positive_values) & (positive_values > 0)]
-    if positive_values.size > 0:
-        y_min = min(1e-2, float(np.min(positive_values)))
-        y_max = float(np.max(positive_values))
-        if y_max <= y_min:
-            y_max = y_min * 10.0
-        tick_candidates = np.array([0.1, 0.5, 1.0, y_max], dtype=np.float64)
-        tick_candidates = tick_candidates[(tick_candidates >= y_min) & (tick_candidates <= y_max)]
-        if tick_candidates.size == 0:
-            tick_candidates = np.array([y_min, y_max], dtype=np.float64)
+    cf_values = np.asarray(cf_recon_channel, dtype=np.float64).ravel()
+    cf_values = cf_values[np.isfinite(cf_values) & (cf_values > 0)]
+    if cf_values.size > 0:
+        y_min = float(np.min(cf_values)) / 1.2
+        y_max = float(np.max(cf_values)) * 1.2
         ax.set_ylim(bottom=y_min, top=y_max)
-        ax.set_yticks(np.unique(np.round(tick_candidates, 6)))
+        ax.set_yticks(np.unique(np.round([y_min, y_max], 6)))
     ax.yaxis.set_major_formatter(plt.ScalarFormatter())
     ax.grid(True, alpha=0.25)
-    ax.legend(frameon=False, fontsize=9, loc="best")
+    handles, labels = ax.get_legend_handles_labels()
+    fig.legend(handles, labels, loc="upper center", bbox_to_anchor=(0.5, 0.92), frameon=False, fontsize=9, ncol=2)
     fig.suptitle(
         f"Counterfactual Time Series | sample={sample_id} | channel={channel_name} | "
         f"{label_name} -> {target_label_name} | best model: lag={int(lag)}, "
@@ -856,7 +836,7 @@ def plot_counterfactual_channel_timeseries(
         fontsize=12,
         y=0.995,
     )
-    plt.tight_layout(rect=[0, 0, 1, 0.96])
+    plt.tight_layout(rect=[0, 0, 1, 0.88])
     output_path.parent.mkdir(parents=True, exist_ok=True)
     plt.savefig(output_path, dpi=220, bbox_inches="tight")
     plt.close(fig)

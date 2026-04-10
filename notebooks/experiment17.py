@@ -56,8 +56,16 @@ def safe_exp_transform(sample: np.ndarray, channel_order: list[str]) -> np.ndarr
     for idx, ch in enumerate(channel_order):
         scale = _CHANNEL_SCALE.get(ch, 1.0)
         arr[:, idx] *= scale
-    # Optional extra guard; values above ~20 lead to huge exp but still finite
     arr = np.clip(arr, None, 20.0)
+    return np.exp(arr, dtype=np.float64).astype(np.float32)
+
+
+def raw_exp_transform(sample: np.ndarray) -> np.ndarray:
+    """Exponentiate raw values without per-channel scaling.
+
+    Clips at log(float32_max) ≈ 88.72 before exp to guarantee finite float32 output.
+    """
+    arr = np.clip(np.asarray(sample, dtype=np.float64), None, float(np.log(np.finfo(np.float32).max)))
     return np.exp(arr, dtype=np.float64).astype(np.float32)
 
 
@@ -123,6 +131,7 @@ def run_variant(
 
     results_path = out_dir / f"experiment17_{variant_name}_results_{variant_stamp}.csv"
     selection_path = out_dir / f"experiment17_{variant_name}_selection_{variant_stamp}.csv"
+    out_dir.mkdir(parents=True, exist_ok=True)
     results_df.to_csv(results_path, index=False)
     selection_df.to_csv(selection_path, index=False)
 
@@ -159,6 +168,7 @@ def run_variant(
         and int(artifact["top_percent_key"]) == int(percent_key(float(best_row["top_percent"])))
     )
     best_summary_path = out_dir / f"experiment17_{variant_name}_best_model_summary_{variant_stamp}.csv"
+    best_summary_path.parent.mkdir(parents=True, exist_ok=True)
     pd.DataFrame([best_row]).to_csv(best_summary_path, index=False)
 
     best_rows_by_lag = select_best_per_lag(results_df)
@@ -198,6 +208,7 @@ def run_variant(
     counterfactual_df = (
         pd.concat(counterfactual_frames, axis=0, ignore_index=True) if counterfactual_frames else pd.DataFrame()
     )
+    counterfactual_summary_path.parent.mkdir(parents=True, exist_ok=True)
     counterfactual_df.to_csv(counterfactual_summary_path, index=False)
 
     return {
@@ -241,6 +252,10 @@ def main():
     X_val_exp = [safe_exp_transform(x, target_channels) for x in X_val]
     X_test_exp = [safe_exp_transform(x, target_channels) for x in X_test]
 
+    X_train_raw_exp = [raw_exp_transform(x) for x in X_train]
+    X_val_raw_exp = [raw_exp_transform(x) for x in X_val]
+    X_test_raw_exp = [raw_exp_transform(x) for x in X_test]
+
     event_onset_index = 720
     observation_window_size = 360
     fft_window_sizes = [45, 90, 180, 360]
@@ -250,7 +265,7 @@ def main():
     output_root = data_root / "reports" / "experiment17"
     output_root.mkdir(parents=True, exist_ok=True)
     run_stamp = pd.Timestamp.now().strftime("%Y%m%d_%H%M%S")
-
+    print("Experiment 17:Baseline (raw input) variant starting...")
     # Baseline pipeline (raw)
     baseline_artifacts = run_variant(
         variant_name="baseline",
@@ -271,7 +286,8 @@ def main():
         output_root=output_root,
         run_stamp=run_stamp,
     )
-
+    print("Experiment 17:Baseline variant completed.\n")
+    print("Experiment 17:Exp-before-FFT (with channel scaling) variant starting...")
     # Exp-before-FFT pipeline
     exp_fft_artifacts = run_variant(
         variant_name="exp_fft",
@@ -292,24 +308,53 @@ def main():
         output_root=output_root,
         run_stamp=run_stamp,
     )
+    print("Experiment 17:Exp-before-FFT (with channel scaling) variant completed.\n")
+    print("Experiment 17:Exp-before-FFT (no channel scaling) variant starting...")
 
-    # A/B summary
+    # Raw-exp-before-FFT pipeline (no per-channel scaling)
+    exp_fft_artifacts_no_scaling = run_variant(
+        variant_name="exp_fft_no_scaling",
+        X_train=X_train_raw_exp,
+        y_train=y_train,
+        X_val=X_val_raw_exp,
+        y_val=y_val,
+        X_test=X_test_raw_exp,
+        y_test=y_test,
+        test_ids=test_ids,
+        classes=dataset.classes_,
+        channel_names=target_channels,
+        event_onset_index=event_onset_index,
+        observation_window_size=observation_window_size,
+        fft_window_sizes=fft_window_sizes,
+        forecast_lags=forecast_lags,
+        top_percents=top_percents,
+        output_root=output_root,
+        run_stamp=run_stamp,
+    )
+    print("Experiment 17:Exp-before-FFT (no channel scaling) variant completed.\n")
+
+
+    # A/B/C summary
     ab_summary = pd.DataFrame(
         [
             {"variant": baseline_artifacts["variant"], **baseline_artifacts["best_row"].to_dict()},
             {"variant": exp_fft_artifacts["variant"], **exp_fft_artifacts["best_row"].to_dict()},
+            {"variant": exp_fft_artifacts_no_scaling["variant"], **exp_fft_artifacts_no_scaling["best_row"].to_dict()},
         ]
     )
     ab_summary_path = output_root / f"experiment17_ab_compare_{run_stamp}.csv"
+    ab_summary_path.parent.mkdir(parents=True, exist_ok=True)
     ab_summary.to_csv(ab_summary_path, index=False)
 
     print("\n" + "=" * 80)
     print("Experiment 17 finished.")
     print(f"Baseline best summary: {baseline_artifacts['best_summary_path']}")
     print(f"Exp-FFT best summary: {exp_fft_artifacts['best_summary_path']}")
-    print(f"A/B summary: {ab_summary_path}")
+    print(f"Raw-Exp-FFT best summary: {exp_fft_artifacts_no_scaling['best_summary_path']}")
+    print(f"A/B/C summary: {ab_summary_path}")
     print(f"Baseline models dir: {baseline_artifacts['models_dir']}")
     print(f"Exp-FFT models dir: {exp_fft_artifacts['models_dir']}")
+    print(f"Raw-Exp-FFT models dir: {exp_fft_artifacts_no_scaling['models_dir']}")
     print("=" * 80)
 
 

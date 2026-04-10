@@ -1171,13 +1171,13 @@ def plot_features_needed_for_half_importance(results_df: pd.DataFrame, output_pa
 
     ax.set_xticks(x)
     ax.set_xticklabels([f"{int(round(p * 100.0))}%" for p in top_percents])
-    ax.set_title("Experiment 15: #features needed to exceed 50% cumulative importance")
     ax.set_xlabel("Global top-% selected after window concatenation")
     ax.set_ylabel("Feature count to exceed 50% cumulative importance")
     ax.grid(True, axis="y", alpha=0.25)
-    ax.legend(frameon=False, ncol=min(len(lags), 5))
-
-    plt.tight_layout()
+    handles, labels = ax.get_legend_handles_labels()
+    fig.legend(handles, labels, loc="upper center", bbox_to_anchor=(0.5, 0.92), frameon=False, ncol=min(len(lags), 5))
+    fig.suptitle("Experiment 15: #features needed to exceed 50% cumulative importance", fontsize=12, y=0.995)
+    plt.tight_layout(rect=[0, 0, 1, 0.88])
     output_path.parent.mkdir(parents=True, exist_ok=True)
     plt.savefig(output_path, dpi=220, bbox_inches="tight")
     plt.close()
