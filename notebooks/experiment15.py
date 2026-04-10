@@ -797,6 +797,142 @@ def plot_feature_importance_line_grid(
     plt.close()
 
 
+def plot_topk_feature_importance_by_window(
+    model_artifacts: list[dict],
+    selection_df: pd.DataFrame,
+    forecast_lags: list[int],
+    top_percents: list[float],
+    output_dir: Path,
+    observation_window_size: int,
+    filename_suffix: str | None = None,
+):
+    """Plot top-k feature importances laid out per window (one subplot per window).
+
+    For each (lag, top%) artifact we rebuild a dense importance vector of length
+    `total_features_for_window`, filling non-selected positions with zeros. Values
+    are normalized by the total feature count (features_per_window * n_slices).
+    The resulting arrays are plotted per window; rows correspond to window sizes
+    and columns to top-% selections for the given lag. Slice boundaries are shown
+    as dotted vertical lines.
+    """
+
+    if not model_artifacts:
+        return []
+
+    # Map: (lag, top_key) -> artifact
+    artifact_map: dict[tuple[int, int], dict] = {}
+    for artifact in model_artifacts:
+        artifact_map[(int(artifact["forecast_lag_min"]), int(artifact["top_percent_key"]))] = artifact
+
+    lag_order = [int(l) for l in forecast_lags]
+    top_keys = [int(percent_key(p)) for p in top_percents]
+    if not lag_order or not top_keys:
+        return []
+
+    # Derive window -> total_feature_count per lag from selection_df columns
+    window_total_cols = [c for c in selection_df.columns if c.startswith("window") and c.endswith("_total_features")]
+    window_counts_by_lag: dict[int, dict[int, int]] = {}
+    for lag in lag_order:
+        rows = selection_df[selection_df["forecast_lag_min"] == int(lag)]
+        if rows.empty:
+            continue
+        row = rows.iloc[0]
+        window_counts_by_lag[int(lag)] = {
+            int(col[len("window") :].split("_")[0]): int(row[col]) for col in window_total_cols
+        }
+
+    example_artifact = next(iter(model_artifacts))
+    windows = [int(w) for w in example_artifact.get("windows", sorted(example_artifact["selected_feature_indices_by_window"].keys()))]
+    n_slices_by_window = {int(w): max(1, int(observation_window_size // int(w))) for w in windows}
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    saved_paths: list[Path] = []
+
+    for lag in lag_order:
+        # Prepare canvas: rows=windows, cols=top% keys
+        nrows, ncols = len(windows), len(top_keys)
+        fig, axes = plt.subplots(nrows, ncols, figsize=(4.0 * ncols, 1.9 * nrows), sharex=False, sharey=False)
+        axes = np.asarray(axes).reshape(nrows, ncols)
+
+        for c, top_key in enumerate(top_keys):
+            artifact = artifact_map.get((int(lag), int(top_key)))
+            if artifact is None:
+                for r in range(nrows):
+                    axes[r, c].axis("off")
+                continue
+
+            importances = np.asarray(artifact["model"].feature_importances_, dtype=np.float64).ravel()
+            selected_idx_by_window = artifact["selected_feature_indices_by_window"]
+            win_feature_counts = window_counts_by_lag.get(int(lag), {})
+            feature_totals_override = {45: 1472, 90: 1472, 180: 1456, 360: 1448}
+
+            # Model importances are ordered as concatenation of per-window selected indices (sorted).
+            offset = 0
+            for r, window in enumerate(windows):
+                ax = axes[r, c]
+                local_idx = [int(i) for i in selected_idx_by_window.get(int(window), [])]
+                count = len(local_idx)
+                if count > 0:
+                    segment = importances[offset : offset + count]
+                else:
+                    segment = np.asarray([], dtype=np.float64)
+                offset += count
+
+                total_count = int(win_feature_counts.get(int(window), 0))
+                if int(window) in feature_totals_override:
+                    total_count = feature_totals_override[int(window)]
+                elif total_count <= 0:
+                    total_count = int(max(local_idx) + 1) if local_idx else 0
+
+                values = np.zeros(total_count, dtype=np.float64)
+                if count > 0:
+                    values[np.asarray(local_idx, dtype=np.int64)] = segment
+
+                if values.size == 0:
+                    ax.axis("off")
+                    continue
+
+                x = np.arange(values.size, dtype=np.int64)
+                ax.plot(x, values, color="#1f77b4", linewidth=0.8)
+                ax.set_xlim(0, max(1, values.size - 1))
+                ax.grid(True, axis="y", alpha=0.2)
+                ax.tick_params(labelsize=7)
+
+                # Add slice separators
+                n_slices = n_slices_by_window.get(int(window), 1)
+                per_slice = int(total_count / n_slices) if n_slices > 0 else total_count
+                for slice_idx in range(1, n_slices):
+                    boundary = slice_idx * per_slice
+                    ax.axvline(boundary, color="#9a9a9a", linestyle=":", linewidth=0.7, alpha=0.8)
+
+                title = f"lag{int(lag)} | w{int(window)} | top{top_key}% | sel={count}"
+                ax.set_title(title, fontsize=8)
+                if c == 0:
+                    ax.set_ylabel("importance", fontsize=8)
+                if r == nrows - 1:
+                    ax.set_xlabel("feature idx", fontsize=8)
+
+            # sanity: ensure we consumed importances for present windows
+            if offset != importances.size:
+                warnings.warn(
+                    f"Artifact lag={lag} top={top_key}%: expected {importances.size} importance entries, consumed {offset}."
+                )
+
+        suffix = f"_{filename_suffix}" if filename_suffix else ""
+        save_path = output_dir / f"experiment15_topk_importance_by_window_lag{int(lag)}{suffix}.png"
+        fig.suptitle(
+            f"Lag {int(lag)} – top-k feature importances per window (zeros = not selected)",
+            fontsize=12,
+            y=0.995,
+        )
+        plt.tight_layout(rect=[0, 0, 1, 0.97])
+        fig.savefig(save_path, dpi=220, bbox_inches="tight")
+        plt.close(fig)
+        saved_paths.append(save_path)
+
+    return saved_paths
+
+
 def plot_feature_importance_individual_models_by_lag(
     model_artifacts: list[dict],
     results_df: pd.DataFrame,
@@ -1931,6 +2067,17 @@ def main():
         top_percents=top_percents,
         output_dir=per_lag_feature_importance_dir,
         normalize_by_window=True,
+        filename_suffix=stamp,
+    )
+
+    topk_by_window_dir = output_dir / "topk_feature_importance_by_window"
+    topk_by_window_paths = plot_topk_feature_importance_by_window(
+        model_artifacts=model_artifacts,
+        selection_df=selection_df,
+        forecast_lags=forecast_lags,
+        top_percents=top_percents,
+        output_dir=topk_by_window_dir,
+        observation_window_size=observation_window_size,
         filename_suffix=stamp,
     )
 

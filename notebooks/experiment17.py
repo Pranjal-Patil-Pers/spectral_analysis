@@ -40,6 +40,27 @@ from experiment16 import (
 warnings.filterwarnings("ignore")
 
 
+_CHANNEL_MAX = {
+    "p3_flux_ic": 43500.0,
+    "p5_flux_ic": 2780.0,
+    "p7_flux_ic": 652.0,
+    "long": 46714.3,
+}
+_TARGET_PREEXP_MAX = 10.0  # keeps exp well below float32 overflow
+_CHANNEL_SCALE = {k: (_TARGET_PREEXP_MAX / v) for k, v in _CHANNEL_MAX.items()}
+
+
+def safe_exp_transform(sample: np.ndarray, channel_order: list[str]) -> np.ndarray:
+    """Scale per-channel then exponentiate to avoid inf/overflow."""
+    arr = np.asarray(sample, dtype=np.float64).copy()
+    for idx, ch in enumerate(channel_order):
+        scale = _CHANNEL_SCALE.get(ch, 1.0)
+        arr[:, idx] *= scale
+    # Optional extra guard; values above ~20 lead to huge exp but still finite
+    arr = np.clip(arr, None, 20.0)
+    return np.exp(arr, dtype=np.float64).astype(np.float32)
+
+
 def save_model_artifacts_v17(model_artifacts: list[dict], output_dir: Path, run_stamp: str, prefix: str) -> list[Path]:
     """Same as experiment16 saver but with a configurable filename prefix."""
 
@@ -216,9 +237,9 @@ def main():
     (X_train, y_train, train_ids), (X_val, y_val, _), (X_test, y_test, test_ids) = get_splits_with_ids(dataset)
 
     # Variant data copies
-    X_train_exp = [np.exp(x) for x in X_train]
-    X_val_exp = [np.exp(x) for x in X_val]
-    X_test_exp = [np.exp(x) for x in X_test]
+    X_train_exp = [safe_exp_transform(x, target_channels) for x in X_train]
+    X_val_exp = [safe_exp_transform(x, target_channels) for x in X_val]
+    X_test_exp = [safe_exp_transform(x, target_channels) for x in X_test]
 
     event_onset_index = 720
     observation_window_size = 360
@@ -294,4 +315,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
