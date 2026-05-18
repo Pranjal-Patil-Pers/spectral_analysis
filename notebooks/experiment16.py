@@ -723,12 +723,10 @@ def plot_counterfactual_timeseries(
     target_label_name: str,
     channel_names: list[str],
     original_obs: np.ndarray,
-    original_recon: np.ndarray,
     cf_recon: np.ndarray,
     lag: int,
     window_size: int,
     top_percent_key: int,
-    original_mse: float,
     counterfactual_mse: float,
     output_path: Path,
 ):
@@ -759,22 +757,21 @@ def plot_counterfactual_timeseries(
 
     ax.set_xlabel("Minutes in observation window")
     ax.set_ylabel("Flux (pfu)")
-    ax.set_yscale("log")
+    obs_values = np.asarray(original_obs, dtype=np.float64).ravel()
     cf_values = np.asarray(cf_recon, dtype=np.float64).ravel()
-    cf_values = cf_values[np.isfinite(cf_values) & (cf_values > 0)]
-    if cf_values.size > 0:
-        y_min = float(np.min(cf_values)) / 1.2
-        y_max = float(np.max(cf_values)) * 1.2
+    all_values = np.concatenate([obs_values, cf_values], axis=0)
+    all_values = all_values[np.isfinite(all_values) & (all_values > 0)]
+    if all_values.size > 0:
+        y_min = float(np.min(all_values)) * 0.9
+        y_max = float(np.max(all_values)) * 2.0
         ax.set_ylim(bottom=y_min, top=y_max)
-        ax.set_yticks(np.unique(np.round([y_min, y_max], 6)))
-    ax.yaxis.set_major_formatter(plt.ScalarFormatter())
     ax.grid(True, alpha=0.25)
     handles, labels = ax.get_legend_handles_labels()
     fig.legend(handles, labels, loc="upper center", bbox_to_anchor=(0.5, 0.92), frameon=False, fontsize=8, ncol=4)
     fig.suptitle(
         f"Counterfactual Time Series | sample={sample_id} | {label_name} -> {target_label_name} | "
         f"best model: lag={int(lag)}, window={int(window_size)}, top%={int(top_percent_key)} | "
-        f"orig recon MSE={original_mse:.3e} | cf recon MSE={counterfactual_mse:.3e}",
+        f"cf recon MSE={counterfactual_mse:.3e}",
         fontsize=12,
         y=0.995,
     )
@@ -817,15 +814,14 @@ def plot_counterfactual_channel_timeseries(
     )
     ax.set_xlabel("Minutes in observation window")
     ax.set_ylabel("Flux (pfu)")
-    ax.set_yscale("log")
+    obs_values = np.asarray(original_obs_channel, dtype=np.float64).ravel()
     cf_values = np.asarray(cf_recon_channel, dtype=np.float64).ravel()
-    cf_values = cf_values[np.isfinite(cf_values) & (cf_values > 0)]
-    if cf_values.size > 0:
-        y_min = float(np.min(cf_values)) / 1.2
-        y_max = float(np.max(cf_values)) * 1.2
+    all_values = np.concatenate([obs_values, cf_values], axis=0)
+    all_values = all_values[np.isfinite(all_values) & (all_values > 0)]
+    if all_values.size > 0:
+        y_min = float(np.min(all_values)) * 0.9
+        y_max = float(np.max(all_values)) * 2.0
         ax.set_ylim(bottom=y_min, top=y_max)
-        ax.set_yticks(np.unique(np.round([y_min, y_max], 6)))
-    ax.yaxis.set_major_formatter(plt.ScalarFormatter())
     ax.grid(True, alpha=0.25)
     handles, labels = ax.get_legend_handles_labels()
     fig.legend(handles, labels, loc="upper center", bbox_to_anchor=(0.5, 0.92), frameon=False, fontsize=9, ncol=2)
@@ -979,12 +975,10 @@ def generate_counterfactual_reports(
                 target_label_name=target_label_name,
                 channel_names=channel_names,
                 original_obs=original_obs,
-                original_recon=original_recon,
                 cf_recon=cf_recon,
                 lag=lag,
                 window_size=fft_window_size,
                 top_percent_key=int(artifact["top_percent_key"]),
-                original_mse=original_mse,
                 counterfactual_mse=counterfactual_mse,
                 output_path=combined_plot_path,
             )

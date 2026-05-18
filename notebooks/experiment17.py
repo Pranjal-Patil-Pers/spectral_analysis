@@ -1,9 +1,9 @@
 """
-Experiment 17: compare positivity-preserving transforms for counterfactual generation.
+Experiment 17: baseline comparison of positivity-preserving transforms for FFT-based
+classification and counterfactual generation.
 
-Each method applies a forward transform to the input window, builds FFT features,
-trains a RandomForest, generates counterfactuals, reconstructs through IFFT, then
-applies the inverse transform before plotting the time series.
+The experiment trains a RandomForest for each transform, evaluates lag/window/top-percent
+variants, and generates counterfactuals in the full selected FFT feature space.
 """
 
 from __future__ import annotations
@@ -17,8 +17,9 @@ import matplotlib
 
 matplotlib.use("Agg")
 import pandas as pd
-from sklearn.preprocessing import PowerTransformer
 import numpy as np
+from scipy import stats
+from scipy.special import inv_boxcox
 
 from experiment15 import TimeSeriesDataset, extract_observation_window, percent_key
 from experiment16 import (
@@ -50,63 +51,74 @@ def _as_float32(arr: np.ndarray) -> np.ndarray:
     return np.asarray(arr, dtype=np.float32)
 
 
-def safe_exp_transform(sample: np.ndarray, channel_order: list[str]) -> np.ndarray:
-    """Scale per-channel then exponentiate to avoid inf/overflow."""
+def build_channel_scale(target_preexp_max: float) -> dict[str, float]:
+    return {k: (target_preexp_max / v) for k, v in _CHANNEL_MAX.items()}
+
+
+def fit_exp_clip_max(
+    X_train: list[np.ndarray],
+    channel_order: list[str],
+    channel_scale: dict[str, float],
+) -> float:
+    flat = np.concatenate([np.asarray(x, dtype=np.float64) for x in X_train], axis=0)
+    scaled = flat.copy()
+    for idx, ch in enumerate(channel_order):
+        scale = channel_scale.get(ch, 1.0)
+        scaled[:, idx] *= scale
+    return float(np.max(scaled))
+
+
+def safe_exp_transform(
+    sample: np.ndarray,
+    channel_order: list[str],
+    clip_max: float,
+    channel_scale: dict[str, float],
+) -> np.ndarray:
+    """Scale per-channel then exponentiate for model-space features."""
     arr = np.asarray(sample, dtype=np.float64).copy()
     for idx, ch in enumerate(channel_order):
-        scale = _CHANNEL_SCALE.get(ch, 1.0)
+        scale = channel_scale.get(ch, 1.0)
         arr[:, idx] *= scale
-    arr = np.clip(arr, None, 20.0)
+    arr = np.clip(arr, None, clip_max)
     return np.exp(arr, dtype=np.float64).astype(np.float32)
 
 
-def softplus_transform(sample: np.ndarray) -> np.ndarray:
-    arr = np.asarray(sample, dtype=np.float64)
-    return np.log1p(np.exp(np.clip(arr, None, 20.0))).astype(np.float32)
+def inverse_exp(sample: np.ndarray, channel_order: list[str], channel_scale: dict[str, float]) -> np.ndarray:
+    arr = np.log(np.clip(np.asarray(sample, dtype=np.float64), 1e-12, None))
+    for idx, ch in enumerate(channel_order):
+        scale = channel_scale.get(ch, 1.0)
+        arr[:, idx] /= scale
+    return arr.astype(np.float32)
 
 
-def square_transform(sample: np.ndarray) -> np.ndarray:
-    arr = np.asarray(sample, dtype=np.float64)
-    return np.square(arr).astype(np.float32)
+def log1p_transform(sample: np.ndarray) -> np.ndarray:
+    """Log-compress positive flux values for model-space features."""
+    return np.log1p(np.clip(np.asarray(sample, dtype=np.float64), 0.0, None)).astype(np.float32)
 
 
-def abs_transform(sample: np.ndarray) -> np.ndarray:
-    return np.abs(np.asarray(sample, dtype=np.float64)).astype(np.float32)
+def inverse_log1p(sample: np.ndarray) -> np.ndarray:
+    return np.expm1(np.asarray(sample, dtype=np.float64)).astype(np.float32)
 
 
-def inverse_exp(sample: np.ndarray) -> np.ndarray:
-    return np.log(np.clip(np.asarray(sample, dtype=np.float64), 1e-12, None)).astype(np.float32)
-
-
-def inverse_softplus(sample: np.ndarray) -> np.ndarray:
-    arr = np.asarray(sample, dtype=np.float64)
-    return np.log(np.expm1(np.clip(arr, 1e-12, None))).astype(np.float32)
-
-
-def inverse_square(sample: np.ndarray) -> np.ndarray:
-    return np.sqrt(np.clip(np.asarray(sample, dtype=np.float64), 0.0, None)).astype(np.float32)
-
-
-def inverse_abs(sample: np.ndarray) -> np.ndarray:
-    return _as_float32(sample)
-
-
-def fit_yeo_johnson_transform(X_train: list[np.ndarray]) -> tuple[PowerTransformer, callable, callable]:
-    transformer = PowerTransformer(method="yeo-johnson", standardize=False)
-    flat = np.concatenate([np.asarray(x, dtype=np.float64).reshape(-1, 1) for x in X_train], axis=0)
-    transformer.fit(flat)
+def fit_box_cox_transform(X_train: list[np.ndarray]) -> tuple[float, float, callable, callable]:
+    """Fit a Box-Cox transform on the training split for model-space features."""
+    flat = np.concatenate([np.asarray(x, dtype=np.float64).reshape(-1) for x in X_train], axis=0)
+    min_val = float(np.min(flat))
+    shift = 1e-6 if min_val > 0 else (-min_val + 1e-6)
+    shifted = flat + shift
+    _, lambda_ = stats.boxcox(shifted)
 
     def forward(sample: np.ndarray) -> np.ndarray:
         shape = np.asarray(sample).shape
-        transformed = transformer.transform(np.asarray(sample, dtype=np.float64).reshape(-1, 1))
-        return transformed.reshape(shape).astype(np.float32)
+        arr = np.asarray(sample, dtype=np.float64).reshape(-1) + shift
+        return stats.boxcox(arr, lmbda=lambda_).reshape(shape).astype(np.float32)
 
     def inverse(sample: np.ndarray) -> np.ndarray:
         shape = np.asarray(sample).shape
-        restored = transformer.inverse_transform(np.asarray(sample, dtype=np.float64).reshape(-1, 1))
+        restored = inv_boxcox(np.asarray(sample, dtype=np.float64).reshape(-1), lambda_) - shift
         return restored.reshape(shape).astype(np.float32)
 
-    return transformer, forward, inverse
+    return shift, lambda_, forward, inverse
 
 
 def transform_dataset(X_data: list[np.ndarray], transform_fn) -> list[np.ndarray]:
@@ -231,6 +243,7 @@ def generate_transform_counterfactual_reports(
     artifact: dict,
     X_train: list[np.ndarray],
     y_train: np.ndarray,
+    X_examples_raw: list[np.ndarray],
     X_examples: list[np.ndarray],
     y_examples: np.ndarray,
     example_ids: list[str],
@@ -334,22 +347,11 @@ def generate_transform_counterfactual_reports(
             cf_full = original_full.copy()
             cf_full[selected_idx] = cf_selected
 
-            original_obs = inverse_transform_fn(
-                extract_observation_window(
-                    X_examples[idx],
-                    event_index=event_index,
-                    observation_window_size=observation_window_size,
-                    lag_minute=lag,
-                )
-            )
-            original_recon = inverse_transform_fn(
-                reconstruct_observation_from_fft_features(
-                    original_full,
-                    channels=channels,
-                    n_slices=n_slices,
-                    max_coeffs=max_coeffs,
-                    fft_window_size=fft_window_size,
-                )
+            original_obs = extract_observation_window(
+                X_examples_raw[idx],
+                event_index=event_index,
+                observation_window_size=observation_window_size,
+                lag_minute=lag,
             )
             cf_recon = inverse_transform_fn(
                 reconstruct_observation_from_fft_features(
@@ -360,7 +362,6 @@ def generate_transform_counterfactual_reports(
                     fft_window_size=fft_window_size,
                 )
             )
-            original_mse = float(np.mean((original_obs - original_recon) ** 2))
             counterfactual_mse = float(np.mean((original_obs - cf_recon) ** 2))
             plot_records.append(
                 {
@@ -368,12 +369,10 @@ def generate_transform_counterfactual_reports(
                     "label_name": label_name,
                     "target_label_name": target_label_name,
                     "original_obs": original_obs,
-                    "original_recon": original_recon,
                     "cf_recon": cf_recon,
                     "lag": lag,
                     "window_size": fft_window_size,
                     "top_percent_key": int(artifact["top_percent_key"]),
-                    "original_mse": original_mse,
                     "counterfactual_mse": counterfactual_mse,
                     "channel_names": channel_names,
                 }
@@ -389,35 +388,30 @@ def generate_transform_counterfactual_reports(
                 target_label_name=target_label_name,
                 channel_names=channel_names,
                 original_obs=original_obs,
-                original_recon=original_recon,
                 cf_recon=cf_recon,
                 lag=lag,
                 window_size=fft_window_size,
                 top_percent_key=int(artifact["top_percent_key"]),
-                original_mse=original_mse,
                 counterfactual_mse=counterfactual_mse,
                 output_path=combined_plot_path,
             )
-            for c in range(channels):
-                channel_label = channel_names[c] if c < len(channel_names) else f"ch{c}"
-                channel_plot_path = method_dir / "channels" / (
-                    f"experiment17_{method_name}_cf_sample_{sample_id}_lag{lag}_w{fft_window_size}_"
-                    f"top{int(artifact['top_percent_key'])}_{channel_label}_{label_name}_"
-                    f"to_{target_label_name}_{run_stamp}.png"
-                )
-                plot_counterfactual_channel_timeseries(
-                    sample_id=sample_id,
-                    label_name=f"{method_name}: {label_name}",
-                    target_label_name=target_label_name,
-                    channel_name=channel_label,
-                    original_obs_channel=original_obs[:, c],
-                    cf_recon_channel=cf_recon[:, c],
-                    lag=lag,
-                    window_size=fft_window_size,
-                    top_percent_key=int(artifact["top_percent_key"]),
-                    counterfactual_mse=float(np.mean((original_obs[:, c] - cf_recon[:, c]) ** 2)),
-                    output_path=channel_plot_path,
-                )
+            log_combined_plot_path = method_dir / "counterfactual_timeseries" / run_stamp / "log_domain" / (
+                f"experiment17_{method_name}_cf_sample_{sample_id}_lag{lag}_w{fft_window_size}_"
+                f"top{int(artifact['top_percent_key'])}_{label_name}_to_{target_label_name}_{run_stamp}_combined.png"
+            )
+            plot_counterfactual_log_timeseries(
+                sample_id=sample_id,
+                label_name=f"{method_name}: {label_name}",
+                target_label_name=target_label_name,
+                channel_names=channel_names,
+                original_obs=original_obs,
+                cf_recon=cf_recon,
+                lag=lag,
+                window_size=fft_window_size,
+                top_percent_key=int(artifact["top_percent_key"]),
+                counterfactual_mse=counterfactual_mse,
+                output_path=log_combined_plot_path,
+            )
             cf_generated = True
         except Exception as exc:
             error_message = str(exc)
@@ -474,14 +468,22 @@ def plot_counterfactual_gallery(
             ax.plot(x, original_obs[:, c], color=color, linewidth=1.4, alpha=0.35, label=f"{label} original" if i == 0 else None)
             ax.plot(x, cf_recon[:, c], color=color, linewidth=1.8, linestyle="--", label=f"{label} cf" if i == 0 else None)
 
-        ax.set_yscale("log")
+        all_values = np.concatenate(
+            [
+                np.asarray(original_obs, dtype=np.float64).ravel(),
+                np.asarray(cf_recon, dtype=np.float64).ravel(),
+            ],
+            axis=0,
+        )
+        all_values = all_values[np.isfinite(all_values) & (all_values > 0)]
+        if all_values.size > 0:
+            ax.set_ylim(bottom=float(np.min(all_values)) * 0.9, top=float(np.max(all_values)) * 2.0)
         ax.grid(True, alpha=0.25)
         ax.set_title(
             f"{record['sample_id']} | {record['label_name']} -> {record['target_label_name']}\n"
             f"MSE={float(record['counterfactual_mse']):.3e}",
             fontsize=10,
         )
-        ax.yaxis.set_major_formatter(plt.ScalarFormatter())
 
     for j in range(n_plots, len(axes_arr)):
         axes_arr[j].axis("off")
@@ -490,6 +492,58 @@ def plot_counterfactual_gallery(
     fig.legend(handles, labels, loc="upper center", bbox_to_anchor=(0.5, 0.98), ncol=4, frameon=False, fontsize=9)
     fig.suptitle(f"Experiment 17 Counterfactual Gallery | {method_name}", fontsize=14, y=0.995)
     plt.tight_layout(rect=[0, 0, 1, 0.95])
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    plt.savefig(output_path, dpi=220, bbox_inches="tight")
+    plt.close(fig)
+
+
+def plot_counterfactual_log_timeseries(
+    sample_id: str,
+    label_name: str,
+    target_label_name: str,
+    channel_names: list[str],
+    original_obs: np.ndarray,
+    cf_recon: np.ndarray,
+    lag: int,
+    window_size: int,
+    top_percent_key: int,
+    counterfactual_mse: float,
+    output_path: Path,
+) -> None:
+    import matplotlib.pyplot as plt
+
+    original_log = np.log10(np.clip(np.asarray(original_obs, dtype=np.float64), 1e-12, None))
+    cf_log = np.log10(np.clip(np.asarray(cf_recon, dtype=np.float64), 1e-12, None))
+
+    channels = int(original_log.shape[1])
+    fig, ax = plt.subplots(1, 1, figsize=(14, 6))
+    x = np.arange(original_log.shape[0], dtype=np.int64)
+    custom_colors = ["#FF0000", "#1b5c0c", "#FFA500", "#0000FF"]
+    colors = custom_colors
+
+    for c in range(channels):
+        label = channel_names[c] if c < len(channel_names) else f"ch{c}"
+        color = colors[c % len(colors)]
+        ax.plot(x, original_log[:, c], color=color, linewidth=1.8, label=f"{label} original")
+        ax.plot(x, cf_log[:, c], color=color, linewidth=1.8, linestyle="--", label=f"{label} counterfactual")
+
+    ax.set_xlabel("Minutes in observation window")
+    ax.set_ylabel("log10(pfu)")
+    all_values = np.concatenate([original_log.ravel(), cf_log.ravel()], axis=0)
+    all_values = all_values[np.isfinite(all_values)]
+    if all_values.size > 0:
+        ax.set_ylim(bottom=float(np.min(all_values)) * 0.9, top=float(np.max(all_values)) * 1.1)
+    ax.grid(True, alpha=0.25)
+    handles, labels = ax.get_legend_handles_labels()
+    fig.legend(handles, labels, loc="upper center", bbox_to_anchor=(0.5, 0.92), frameon=False, fontsize=8, ncol=4)
+    fig.suptitle(
+        f"Counterfactual Time Series | sample={sample_id} | {label_name} -> {target_label_name} | "
+        f"best model: lag={int(lag)}, window={int(window_size)}, top%={int(top_percent_key)} | "
+        f"cf recon MSE={counterfactual_mse:.3e}",
+        fontsize=12,
+        y=0.995,
+    )
+    plt.tight_layout(rect=[0, 0, 1, 0.88])
     output_path.parent.mkdir(parents=True, exist_ok=True)
     plt.savefig(output_path, dpi=220, bbox_inches="tight")
     plt.close(fig)
@@ -517,29 +571,29 @@ def main():
     )
 
     (X_train, y_train, train_ids), (X_val, y_val, _), (X_test, y_test, test_ids) = get_splits_with_ids(dataset)
+    exp10_channel_scale = build_channel_scale(10.0)
+    exp1_channel_scale = build_channel_scale(1.0)
+    exp10_clip_max = fit_exp_clip_max(X_train, target_channels, exp10_channel_scale)
+    exp1_clip_max = fit_exp_clip_max(X_train, target_channels, exp1_channel_scale)
 
     method_specs = {
-        "exp": {
-            "forward": lambda x: safe_exp_transform(x, target_channels),
-            "inverse": inverse_exp,
+        "exp10": {
+            "forward": lambda x: safe_exp_transform(x, target_channels, exp10_clip_max, exp10_channel_scale),
+            "inverse": lambda x: inverse_exp(x, target_channels, exp10_channel_scale),
         },
-        "softplus": {
-            "forward": softplus_transform,
-            "inverse": inverse_softplus,
+        "exp1": {
+            "forward": lambda x: safe_exp_transform(x, target_channels, exp1_clip_max, exp1_channel_scale),
+            "inverse": lambda x: inverse_exp(x, target_channels, exp1_channel_scale),
         },
-        "square": {
-            "forward": square_transform,
-            "inverse": inverse_square,
+        "log1p": {
+            "forward": log1p_transform,
+            "inverse": inverse_log1p,
         },
-        "abs": {
-            "forward": abs_transform,
-            "inverse": inverse_abs,
-        },
-        "yeo_johnson": {},
+        "box_cox": {},
     }
-    _yj_transformer, yj_forward, yj_inverse = fit_yeo_johnson_transform(X_train)
-    method_specs["yeo_johnson"]["forward"] = yj_forward
-    method_specs["yeo_johnson"]["inverse"] = yj_inverse
+    _boxcox_shift, _boxcox_lambda, boxcox_forward, boxcox_inverse = fit_box_cox_transform(X_train)
+    method_specs["box_cox"]["forward"] = boxcox_forward
+    method_specs["box_cox"]["inverse"] = boxcox_inverse
 
     event_onset_index = 720
     observation_window_size = 360
@@ -591,12 +645,14 @@ def main():
                 break
         if best_artifact is None:
             raise RuntimeError(f"Could not find best artifact for method '{method_name}'.")
+
         counterfactual_plot_dir = output_root / method_name / "counterfactual_timeseries" / run_stamp
         counterfactual_summary_path = output_root / method_name / f"experiment17_{method_name}_counterfactual_summary_{run_stamp}.csv"
         counterfactual_df, plot_records = generate_transform_counterfactual_reports(
             artifact=best_artifact,
             X_train=X_train_m,
             y_train=y_train,
+            X_examples_raw=X_test,
             X_examples=X_test_m,
             y_examples=y_test,
             example_ids=test_ids,
