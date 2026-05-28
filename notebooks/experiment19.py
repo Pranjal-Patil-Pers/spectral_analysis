@@ -1,10 +1,9 @@
 """
-Experiment 19: compare positivity-preserving transforms and counterfactual smoothness
-under different feature-varying budgets.
+Experiment 19: Box-Cox counterfactual sweep across feature-varying budgets.
 
-The baseline methods are unchanged, but `box_cox` reuses the latest best model from
-Experiment 17 and is evaluated with several counterfactual search scopes to see how
-limiting high-frequency FFT features affects reconstruction jitter.
+This experiment reuses the latest best Box-Cox model from Experiment 17 and compares
+counterfactual generation when DiCE is allowed to vary only low-frequency FFT features
+versus broader feature sets, to study the impact on reconstruction smoothness.
 """
 
 from __future__ import annotations
@@ -38,6 +37,8 @@ from experiment16 import (
 # Suppress all warnings to match experiment16 behaviour
 warnings.filterwarnings("ignore")
 
+
+_DICE_CHANGE_TOLERANCE = 1e-9
 
 _CHANNEL_MAX = {
     "p3_flux_ic": 43500.0,
@@ -159,6 +160,203 @@ def features_to_vary_for_box_cox(feature_names: list[str], cutoff: str) -> list[
     if cutoff_key in {"0-all", "all", "full"}:
         return list(feature_names)
     raise ValueError(f"Unknown box_cox feature-vary cutoff '{cutoff}'.")
+
+
+def fit_dice_metric_stats(X_train_sel: np.ndarray) -> dict[str, np.ndarray]:
+    """Precompute inverse-MAD weights used by DiCE for continuous features."""
+    train = np.asarray(X_train_sel, dtype=np.float64)
+    feature_median = np.median(train, axis=0)
+    feature_mad = np.median(np.abs(train - feature_median), axis=0)
+    feature_mad = np.where(feature_mad > 0, feature_mad, 1.0)
+
+    feature_weights = np.divide(
+        1.0,
+        feature_mad,
+        out=np.ones_like(feature_mad, dtype=np.float64),
+        where=feature_mad > 0,
+    )
+    feature_weights = np.where(np.isfinite(feature_weights), feature_weights, 1.0)
+
+    return {
+        "feature_mad": feature_mad,
+        "feature_weights": feature_weights,
+    }
+
+
+def dice_weighted_l1_distance(
+    x: np.ndarray,
+    y: np.ndarray,
+    metric_stats: dict[str, np.ndarray],
+    average_over_features: bool = False,
+) -> np.ndarray:
+    """DiCE-style continuous distance: sum_j abs(x_j - y_j) / MAD_j."""
+    x_arr = np.asarray(x, dtype=np.float64)
+    y_arr = np.asarray(y, dtype=np.float64)
+    feature_weights = np.asarray(metric_stats["feature_weights"], dtype=np.float64)
+
+    weighted = np.abs(x_arr - y_arr) * feature_weights
+    distances = np.sum(weighted, axis=-1)
+    if average_over_features and feature_weights.size > 0:
+        distances = distances / int(feature_weights.size)
+    return distances
+
+
+def compute_dice_counterfactual_metrics(
+    original_sel: np.ndarray,
+    cf_selected: np.ndarray,
+    X_train_sel: np.ndarray,
+    y_train: np.ndarray,
+    cf_prediction: int,
+    metric_stats: dict[str, np.ndarray],
+) -> dict[str, float | int]:
+    """Compute per-CF metrics in the same selected FFT feature space DiCE edits."""
+    original = np.asarray(original_sel, dtype=np.float64)
+    cf = np.asarray(cf_selected, dtype=np.float64)
+    train = np.asarray(X_train_sel, dtype=np.float64)
+    train_labels = np.asarray(y_train, dtype=np.int32)
+
+    changed_mask = np.abs(cf - original) > _DICE_CHANGE_TOLERANCE
+    changed_feature_count = int(np.sum(changed_mask))
+    feature_count = int(cf.shape[0])
+    sparsity_loss = float(changed_feature_count / feature_count) if feature_count > 0 else np.nan
+
+    proximity_loss = float(
+        dice_weighted_l1_distance(
+            cf,
+            original,
+            metric_stats=metric_stats,
+            average_over_features=True,
+        )
+    )
+
+    same_class_mask = train_labels == int(cf_prediction)
+    plausibility_pool = train[same_class_mask] if np.any(same_class_mask) else train
+    nearest_train_index = -1
+    nearest_train_label = -1
+    plausibility_distance = np.nan
+    if plausibility_pool.size > 0:
+        distances = dice_weighted_l1_distance(
+            plausibility_pool,
+            cf,
+            metric_stats=metric_stats,
+            average_over_features=True,
+        )
+        nearest_pool_index = int(np.argmin(distances))
+        plausibility_distance = float(distances[nearest_pool_index])
+        if np.any(same_class_mask):
+            original_indices = np.where(same_class_mask)[0]
+            nearest_train_index = int(original_indices[nearest_pool_index])
+        else:
+            nearest_train_index = int(nearest_pool_index)
+        nearest_train_label = int(train_labels[nearest_train_index])
+
+    return {
+        "changed_feature_count": changed_feature_count,
+        "selected_feature_count": feature_count,
+        "changed_feature_fraction": sparsity_loss,
+        "dice_proximity_loss": proximity_loss,
+        "dice_proximity_score": float(1.0 / (1.0 + proximity_loss)),
+        "dice_sparsity_loss": sparsity_loss,
+        "dice_sparsity_score": float(1.0 - sparsity_loss) if np.isfinite(sparsity_loss) else np.nan,
+        "dice_plausibility_distance": plausibility_distance,
+        "dice_plausibility_score": (
+            float(1.0 / (1.0 + plausibility_distance))
+            if np.isfinite(plausibility_distance)
+            else np.nan
+        ),
+        "dice_nearest_train_index": nearest_train_index,
+        "dice_nearest_train_label": nearest_train_label,
+    }
+
+
+def compute_dice_diversity_metrics(
+    cf_vectors: list[np.ndarray],
+    metric_stats: dict[str, np.ndarray],
+) -> dict[str, float | int]:
+    """Compute DiCE DPP and avg-distance diversity over the accepted CF set."""
+    if len(cf_vectors) < 2:
+        return {
+            "dice_diversity_dpp": 0.0,
+            "dice_diversity_avg_dist": 0.0,
+            "dice_diversity_pair_count": 0,
+            "dice_mean_pairwise_distance": 0.0,
+        }
+
+    cfs = np.asarray(cf_vectors, dtype=np.float64)
+    n_cfs = int(cfs.shape[0])
+    kernel = np.zeros((n_cfs, n_cfs), dtype=np.float64)
+    pairwise_distances: list[float] = []
+    pairwise_similarities: list[float] = []
+
+    for i in range(n_cfs):
+        for j in range(n_cfs):
+            distance = float(
+                dice_weighted_l1_distance(
+                    cfs[i],
+                    cfs[j],
+                    metric_stats=metric_stats,
+                    average_over_features=False,
+                )
+            )
+            similarity = float(1.0 / (1.0 + distance))
+            kernel[i, j] = similarity
+            if i == j:
+                kernel[i, j] += 0.0001
+            elif i < j:
+                pairwise_distances.append(distance)
+                pairwise_similarities.append(similarity)
+
+    pair_count = len(pairwise_distances)
+    avg_similarity = float(np.mean(pairwise_similarities)) if pairwise_similarities else 1.0
+    return {
+        "dice_diversity_dpp": float(np.linalg.det(kernel)),
+        "dice_diversity_avg_dist": float(1.0 - avg_similarity),
+        "dice_diversity_pair_count": int(pair_count),
+        "dice_mean_pairwise_distance": float(np.mean(pairwise_distances)) if pairwise_distances else 0.0,
+    }
+
+
+def summarize_counterfactual_quality(counterfactual_df: pd.DataFrame) -> pd.DataFrame:
+    if "counterfactual_found" in counterfactual_df:
+        found_df = counterfactual_df[counterfactual_df["counterfactual_found"].astype(bool)].copy()
+    else:
+        found_df = counterfactual_df.iloc[0:0].copy()
+    summary: dict[str, float | int | str] = {
+        "generated_counterfactual_count": int(len(found_df)),
+        "attempted_counterfactual_count": int(len(counterfactual_df)),
+        "counterfactual_success_rate": (
+            float(len(found_df) / len(counterfactual_df)) if len(counterfactual_df) > 0 else np.nan
+        ),
+    }
+
+    metric_cols = [
+        "dice_proximity_loss",
+        "dice_proximity_score",
+        "dice_sparsity_loss",
+        "dice_sparsity_score",
+        "dice_plausibility_distance",
+        "dice_plausibility_score",
+        "changed_feature_count",
+        "changed_feature_fraction",
+        "counterfactual_reconstruction_mse",
+        "counterfactual_reconstruction_mae",
+    ]
+    for col in metric_cols:
+        values = pd.to_numeric(found_df[col], errors="coerce") if col in found_df else pd.Series(dtype=float)
+        summary[f"mean_{col}"] = float(values.mean()) if len(values.dropna()) > 0 else np.nan
+        summary[f"median_{col}"] = float(values.median()) if len(values.dropna()) > 0 else np.nan
+
+    diversity_cols = [
+        "dice_diversity_dpp",
+        "dice_diversity_avg_dist",
+        "dice_diversity_pair_count",
+        "dice_mean_pairwise_distance",
+    ]
+    for col in diversity_cols:
+        values = pd.to_numeric(found_df[col], errors="coerce") if col in found_df else pd.Series(dtype=float)
+        summary[col] = float(values.dropna().iloc[0]) if len(values.dropna()) > 0 else np.nan
+
+    return pd.DataFrame([summary])
 
 
 def _extract_run_stamp_from_stem(stem: str, prefix: str) -> str | None:
@@ -340,7 +538,9 @@ def generate_transform_counterfactual_reports(
     inverse_transform_fn,
     method_name: str,
     features_to_vary="all",
+    features_to_vary_label: str | None = None,
     num_per_class: int = 3,
+    num_cfs_per_instance: int = 10,
     random_state: int = 42,
 ) -> tuple[pd.DataFrame, list[dict[str, object]]]:
     from experiment16 import (
@@ -371,6 +571,7 @@ def generate_transform_counterfactual_reports(
     X_examples_sel = X_examples_flat[:, selected_idx]
     feature_names = list(artifact["selected_feature_names"])
     model = artifact["model"]
+    metric_stats = fit_dice_metric_stats(X_train_sel)
 
     chosen_examples = choose_training_examples_for_counterfactuals(
         X_examples_sel=X_examples_sel,
@@ -389,7 +590,12 @@ def generate_transform_counterfactual_reports(
         model=model,
     )
 
-    rows: list[dict[str, float | int | str]] = []
+    features_to_vary_count = (
+        len(feature_names)
+        if features_to_vary == "all"
+        else len([feature for feature in features_to_vary if feature in feature_names])
+    )
+    rows: list[dict[str, object]] = []
     plot_records: list[dict[str, object]] = []
     channels = int(train_feature_bank["channels"])
     n_slices = int(train_feature_bank["n_slices"])
@@ -397,6 +603,13 @@ def generate_transform_counterfactual_reports(
     fft_window_size = int(artifact["window_size"])
     lag = int(artifact["forecast_lag_min"])
     method_dir = output_dir / method_name
+
+    _scalar_metric_keys = [
+        "changed_feature_count", "selected_feature_count", "changed_feature_fraction",
+        "dice_proximity_loss", "dice_proximity_score", "dice_sparsity_loss",
+        "dice_sparsity_score", "dice_plausibility_distance", "dice_plausibility_score",
+    ]
+    _index_metric_keys = ["dice_nearest_train_index", "dice_nearest_train_label"]
 
     for example in chosen_examples:
         idx = int(example["example_index"])
@@ -410,13 +623,34 @@ def generate_transform_counterfactual_reports(
         cf_prediction = int(example["predicted_label"])
         cf_generated = False
         error_message = ""
+        counterfactual_mse = np.nan
+        counterfactual_mae = np.nan
+        metric_values: dict[str, float | int] = {
+            "changed_feature_count": 0,
+            "selected_feature_count": int(len(feature_names)),
+            "changed_feature_fraction": np.nan,
+            "dice_proximity_loss": np.nan,
+            "dice_proximity_score": np.nan,
+            "dice_sparsity_loss": np.nan,
+            "dice_sparsity_score": np.nan,
+            "dice_plausibility_distance": np.nan,
+            "dice_plausibility_score": np.nan,
+            "dice_nearest_train_index": -1,
+            "dice_nearest_train_label": -1,
+        }
+        instance_diversity: dict[str, float | int] = {
+            "dice_diversity_dpp": np.nan,
+            "dice_diversity_avg_dist": np.nan,
+            "dice_diversity_pair_count": 0,
+            "dice_mean_pairwise_distance": np.nan,
+        }
         target_label = 1 - int(label)
         target_label_name = str(classes[int(target_label)])
 
         try:
             cf_result = dice.generate_counterfactuals(
                 query_df,
-                total_CFs=1,
+                total_CFs=num_cfs_per_instance,
                 desired_class="opposite",
                 features_to_vary=features_to_vary,
                 verbose=False,
@@ -426,11 +660,6 @@ def generate_transform_counterfactual_reports(
             cf_df = cf_result.cf_examples_list[0].final_cfs_df
             if len(cf_df) == 0:
                 raise RuntimeError("DiCE returned no counterfactual rows.")
-            cf_row = cf_df.iloc[0]
-            cf_selected = cf_row[feature_names].astype(float).to_numpy(dtype=np.float64)
-            cf_prediction = int(model.predict(cf_selected.reshape(1, -1))[0])
-            cf_full = original_full.copy()
-            cf_full[selected_idx] = cf_selected
 
             original_obs = extract_observation_window(
                 X_examples_raw[idx],
@@ -438,23 +667,63 @@ def generate_transform_counterfactual_reports(
                 observation_window_size=observation_window_size,
                 lag_minute=lag,
             )
-            cf_recon = inverse_transform_fn(
-                reconstruct_observation_from_fft_features(
-                    cf_full,
-                    channels=channels,
-                    n_slices=n_slices,
-                    max_coeffs=max_coeffs,
-                    fft_window_size=fft_window_size,
+
+            instance_cf_vectors: list[np.ndarray] = []
+            per_cf_metrics: list[dict] = []
+            per_cf_mse: list[float] = []
+            per_cf_mae: list[float] = []
+            first_cf_recon: np.ndarray | None = None
+
+            for cf_row_idx, (_, cf_row) in enumerate(cf_df.iterrows()):
+                cf_selected_i = cf_row[feature_names].astype(float).to_numpy(dtype=np.float64)
+                cf_pred_i = int(model.predict(cf_selected_i.reshape(1, -1))[0])
+                cf_full_i = original_full.copy()
+                cf_full_i[selected_idx] = cf_selected_i
+                cf_recon_i = inverse_transform_fn(
+                    reconstruct_observation_from_fft_features(
+                        cf_full_i,
+                        channels=channels,
+                        n_slices=n_slices,
+                        max_coeffs=max_coeffs,
+                        fft_window_size=fft_window_size,
+                    )
                 )
-            )
-            counterfactual_mse = float(np.mean((original_obs - cf_recon) ** 2))
+                mse_i = float(np.mean((original_obs - cf_recon_i) ** 2))
+                mae_i = float(np.mean(np.abs(original_obs - cf_recon_i)))
+                m_i = compute_dice_counterfactual_metrics(
+                    original_sel=original_sel,
+                    cf_selected=cf_selected_i,
+                    X_train_sel=X_train_sel,
+                    y_train=y_train,
+                    cf_prediction=cf_pred_i,
+                    metric_stats=metric_stats,
+                )
+                instance_cf_vectors.append(cf_selected_i)
+                per_cf_metrics.append(m_i)
+                per_cf_mse.append(mse_i)
+                per_cf_mae.append(mae_i)
+                if cf_row_idx == 0:
+                    first_cf_recon = cf_recon_i
+                    cf_prediction = cf_pred_i
+
+            counterfactual_mse = float(np.mean(per_cf_mse))
+            counterfactual_mae = float(np.mean(per_cf_mae))
+
+            metric_values = {
+                k: float(np.nanmean([m[k] for m in per_cf_metrics]))
+                for k in _scalar_metric_keys
+            }
+            metric_values.update({k: per_cf_metrics[0][k] for k in _index_metric_keys})
+
+            instance_diversity = compute_dice_diversity_metrics(instance_cf_vectors, metric_stats)
+
             plot_records.append(
                 {
                     "sample_id": sample_id,
                     "label_name": label_name,
                     "target_label_name": target_label_name,
                     "original_obs": original_obs,
-                    "cf_recon": cf_recon,
+                    "cf_recon": first_cf_recon,
                     "lag": lag,
                     "window_size": fft_window_size,
                     "top_percent_key": int(artifact["top_percent_key"]),
@@ -473,7 +742,7 @@ def generate_transform_counterfactual_reports(
                 target_label_name=target_label_name,
                 channel_names=channel_names,
                 original_obs=original_obs,
-                cf_recon=cf_recon,
+                cf_recon=first_cf_recon,
                 lag=lag,
                 window_size=fft_window_size,
                 top_percent_key=int(artifact["top_percent_key"]),
@@ -490,7 +759,7 @@ def generate_transform_counterfactual_reports(
                 target_label_name=target_label_name,
                 channel_names=channel_names,
                 original_obs=original_obs,
-                cf_recon=cf_recon,
+                cf_recon=first_cf_recon,
                 lag=lag,
                 window_size=fft_window_size,
                 top_percent_key=int(artifact["top_percent_key"]),
@@ -500,15 +769,20 @@ def generate_transform_counterfactual_reports(
             cf_generated = True
         except Exception as exc:
             error_message = str(exc)
+            if cf_prediction < 0 or cf_prediction >= len(classes):
+                cf_prediction = int(example["predicted_label"])
 
         rows.append(
             {
                 "method": method_name,
+                "counterfactual_cutoff": str(features_to_vary_label or "all"),
                 "sample_id": sample_id,
                 "forecast_lag_min": int(lag),
                 "window_size": int(fft_window_size),
                 "top_percent": float(artifact["top_percent"]),
                 "top_percent_label": f"{int(artifact['top_percent_key'])}%",
+                "features_to_vary_count": int(features_to_vary_count),
+                "features_to_vary_fraction": float(features_to_vary_count / len(feature_names)),
                 "original_label": int(label),
                 "original_label_name": label_name,
                 "desired_counterfactual_label": int(target_label),
@@ -516,6 +790,14 @@ def generate_transform_counterfactual_reports(
                 "counterfactual_predicted_label": int(cf_prediction),
                 "counterfactual_predicted_label_name": str(classes[int(cf_prediction)]),
                 "counterfactual_found": bool(cf_generated),
+                "counterfactual_reconstruction_mse": (
+                    float(counterfactual_mse) if np.isfinite(counterfactual_mse) else np.nan
+                ),
+                "counterfactual_reconstruction_mae": (
+                    float(counterfactual_mae) if np.isfinite(counterfactual_mae) else np.nan
+                ),
+                **metric_values,
+                **instance_diversity,
                 "error": error_message,
             }
         )
@@ -670,12 +952,17 @@ def main():
     X_train_m = transform_dataset(X_train, boxcox_forward)
     X_test_m = transform_dataset(X_test, boxcox_forward)
 
-    for cutoff in ["0-9", "0-20", "0-all"]:
+    for cutoff in ["0-all"]:
         features_to_vary = features_to_vary_for_box_cox(list(best_artifact["selected_feature_names"]), cutoff)
         if not features_to_vary:
             raise RuntimeError(f"No features found for box_cox cutoff '{cutoff}'.")
         cutoff_dir = output_root / method_name / cutoff / "counterfactual_timeseries" / run_stamp
-        counterfactual_summary_path = output_root / method_name / cutoff / f"experiment19_{method_name}_{cutoff}_counterfactual_summary_{run_stamp}.csv"
+        counterfactual_summary_path = (
+            output_root
+            / method_name
+            / cutoff
+            / f"experiment19_{method_name}_{cutoff}_counterfactual_summary_{run_stamp}.csv"
+        )
         counterfactual_df, plot_records = generate_transform_counterfactual_reports(
             artifact=best_artifact,
             X_train=X_train_m,
@@ -693,11 +980,21 @@ def main():
             inverse_transform_fn=boxcox_inverse,
             method_name=method_name,
             features_to_vary=features_to_vary,
-            num_per_class=3,
+            features_to_vary_label=cutoff,
+            num_per_class=50,
+            num_cfs_per_instance=10,
             random_state=42,
         )
         counterfactual_summary_path.parent.mkdir(parents=True, exist_ok=True)
         counterfactual_df.to_csv(counterfactual_summary_path, index=False)
+        counterfactual_metrics_path = (
+            output_root
+            / method_name
+            / cutoff
+            / f"experiment19_{method_name}_{cutoff}_counterfactual_metrics_{run_stamp}.csv"
+        )
+        counterfactual_metrics_df = summarize_counterfactual_quality(counterfactual_df)
+        counterfactual_metrics_df.to_csv(counterfactual_metrics_path, index=False)
         gallery_path = output_root / method_name / cutoff / f"experiment19_{method_name}_{cutoff}_counterfactual_gallery_{run_stamp}.png"
         plot_counterfactual_gallery(method_name=f"{method_name}:{cutoff}", plot_records=plot_records, output_path=gallery_path)
         method_results.append(
@@ -706,6 +1003,7 @@ def main():
                 "counterfactual_cutoff": cutoff,
                 **provenance,
                 "counterfactual_summary_path": counterfactual_summary_path,
+                "counterfactual_metrics_path": counterfactual_metrics_path,
                 "counterfactual_gallery_path": gallery_path,
                 "best_row": best_row.to_dict(),
             }

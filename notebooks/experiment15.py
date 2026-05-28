@@ -160,7 +160,10 @@ def compute_solar_metrics(y_true: np.ndarray, y_pred: np.ndarray, positive_class
     hss_den = (tp + fn) * (fn + tn) + (tp + fp) * (fp + tn)
     hss = hss_num / hss_den if hss_den != 0 else 0.0
 
-    css = tp / (tp + fp + fn) if (tp + fp + fn) > 0 else 0.0
+    # Legacy event-detection CSS definition:
+    # css = tp / (tp + fp + fn) if (tp + fp + fn) > 0 else 0.0
+    theta = tss * hss
+    css = math.sqrt(theta) if theta >= 0.0 else 0.0
 
     return {"tss": tss, "hss": hss, "css": css}
 

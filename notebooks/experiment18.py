@@ -1,9 +1,9 @@
 """
-Experiment 18: compare positivity-preserving transforms for counterfactual generation.
+Experiment 18: Box-Cox counterfactual generation with physical constraints.
 
-Each method applies a forward transform only for modeling and FFT feature extraction,
-trains a RandomForest, generates counterfactuals, reconstructs through IFFT, then
-applies the inverse transform so final plots can stay in raw flux units.
+This experiment trains a RandomForest on Box-Cox-transformed FFT features, then
+generates counterfactuals that are reconstructed back to raw flux space and filtered
+by channel-wise range and ordering constraints to keep the explanations physically plausible.
 """
 
 from __future__ import annotations
@@ -24,12 +24,16 @@ from scipy.special import inv_boxcox
 from experiment15 import TimeSeriesDataset, extract_observation_window, percent_key
 from experiment16 import (
     get_splits_with_ids,
+    reconstruct_observation_from_fft_features,
     plot_features_needed_for_half_importance,
     plot_toppercent_performance_by_lag,
     plot_toppercent_performance_by_window,
     run_independent_window_top_percent_experiment,
     select_best,
     select_best_window_per_lag_toppercent,
+    build_best_model_feature_bank,
+    choose_training_examples_for_counterfactuals,
+    make_dice_explainer,
 )
 
 
@@ -365,15 +369,6 @@ def generate_transform_counterfactual_reports(
     num_per_class: int = 3,
     random_state: int = 42,
 ) -> tuple[pd.DataFrame, list[dict[str, object]]]:
-    from experiment16 import (
-        build_best_model_feature_bank,
-        choose_training_examples_for_counterfactuals,
-        make_dice_explainer,
-        plot_counterfactual_channel_timeseries,
-        plot_counterfactual_timeseries,
-        reconstruct_observation_from_fft_features,
-    )
-
     train_feature_bank = build_best_model_feature_bank(
         artifact=artifact,
         X_data=X_train,
@@ -587,7 +582,7 @@ def plot_counterfactual_gallery(
 
     handles, labels = axes_arr[0].get_legend_handles_labels()
     fig.legend(handles, labels, loc="upper center", bbox_to_anchor=(0.5, 0.98), ncol=4, frameon=False, fontsize=9)
-    fig.suptitle(f"Experiment 17 Counterfactual Gallery | {method_name}", fontsize=14, y=0.995)
+    fig.suptitle(f"Experiment 18 Counterfactual Gallery | {method_name}", fontsize=14, y=0.995)
     plt.tight_layout(rect=[0, 0, 1, 0.95])
     output_path.parent.mkdir(parents=True, exist_ok=True)
     plt.savefig(output_path, dpi=220, bbox_inches="tight")
@@ -773,7 +768,7 @@ def main():
                 "best_row": best_row.to_dict(),
             }
         )
-        print(f"Experiment 17:{method_name} variant completed.\n")
+        print(f"Experiment 18:{method_name} variant completed.\n")
 
     ab_summary = pd.DataFrame(method_results)
     ab_summary_path = output_root / f"experiment18_method_compare_{run_stamp}.csv"

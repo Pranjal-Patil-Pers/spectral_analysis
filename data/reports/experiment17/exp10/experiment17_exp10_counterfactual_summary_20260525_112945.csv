@@ -1,0 +1,7 @@
+method,sample_id,forecast_lag_min,window_size,top_percent,top_percent_label,original_label,original_label_name,desired_counterfactual_label,desired_counterfactual_label_name,counterfactual_predicted_label,counterfactual_predicted_label_name,counterfactual_found,error
+exp10,2003-01-07_06-29,5,90,0.1,10%,0,0,1,1,0,0,True,
+exp10,2003-01-07_22-25,5,90,0.1,10%,0,0,1,1,1,1,True,
+exp10,2003-01-09_00-27,5,90,0.1,10%,0,0,1,1,1,1,True,
+exp10,2003-05-28_11-40,5,90,0.1,10%,1,1,0,0,0,0,True,
+exp10,2003-05-30_16-25,5,90,0.1,10%,1,1,0,0,0,0,True,
+exp10,2003-06-18_12-15,5,90,0.1,10%,1,1,0,0,0,0,True,

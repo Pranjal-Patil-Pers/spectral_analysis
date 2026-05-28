@@ -1,0 +1,32 @@
+2026-05-27 21:25:46,586  INFO     Fetching ICMECAT catalog …
+2026-05-27 21:25:47,912  INFO     Catalog loaded: 1976 total events, columns: ['Unnamed: 0', 'icmecat_id', 'sc_insitu', 'icme_start_time', 'mo_start_time', 'mo_end_time', 'mo_sc_heliodistance', 'mo_sc_long_heeq', 'mo_sc_lat_heeq', 'icme_duration', 'icme_bmax', 'icme_bmean', 'icme_bstd', 'icme_speed_mean', 'icme_speed_std', 'mo_duration', 'mo_bmax', 'mo_bmean', 'mo_bstd', 'mo_bzmean', 'mo_bzmin', 'mo_bzstd', 'mo_bymean', 'mo_bystd', 'mo_speed_mean', 'mo_speed_std', 'mo_expansion_speed', 'mo_pdyn_mean', 'mo_pdyn_std', 'mo_density_mean', 'mo_density_std', 'mo_temperature_mean', 'mo_temperature_std', 'sheath_speed_mean', 'sheath_speed_std', 'sheath_density_mean', 'sheath_density_std', 'sheath_pdyn_mean', 'sheath_pdyn_std']
+2026-05-27 21:25:47,914  INFO     Wind events: 551
+2026-05-27 21:25:47,921  INFO     Wind events with valid timestamps: 551
+2026-05-27 21:44:48,723  INFO     Fetching ICMECAT catalog …
+2026-05-27 21:44:49,992  INFO     Catalog loaded: 1976 total events, columns: ['Unnamed: 0', 'icmecat_id', 'sc_insitu', 'icme_start_time', 'mo_start_time', 'mo_end_time', 'mo_sc_heliodistance', 'mo_sc_long_heeq', 'mo_sc_lat_heeq', 'icme_duration', 'icme_bmax', 'icme_bmean', 'icme_bstd', 'icme_speed_mean', 'icme_speed_std', 'mo_duration', 'mo_bmax', 'mo_bmean', 'mo_bstd', 'mo_bzmean', 'mo_bzmin', 'mo_bzstd', 'mo_bymean', 'mo_bystd', 'mo_speed_mean', 'mo_speed_std', 'mo_expansion_speed', 'mo_pdyn_mean', 'mo_pdyn_std', 'mo_density_mean', 'mo_density_std', 'mo_temperature_mean', 'mo_temperature_std', 'sheath_speed_mean', 'sheath_speed_std', 'sheath_density_mean', 'sheath_density_std', 'sheath_pdyn_mean', 'sheath_pdyn_std']
+2026-05-27 21:44:49,993  INFO     Wind events: 551
+2026-05-27 21:44:49,999  INFO     Wind events with valid timestamps: 551
+2026-05-27 21:56:37,128  ERROR    No events saved — all 551 events were skipped. Check OMNIWeb connectivity or response format.
+2026-05-27 22:52:38,406  INFO     Loading OMNI2 from /Users/pranjal/workspace/spectral_analysis/data/ICMECAT/omni2_all_years.dat …
+2026-05-27 22:52:41,167  INFO     OMNI2 loaded: 561,024 hourly rows
+2026-05-27 22:52:41,167  INFO     Fetching ICMECAT catalog …
+2026-05-27 22:52:42,469  INFO     Catalog loaded: 1976 total events, columns: ['Unnamed: 0', 'icmecat_id', 'sc_insitu', 'icme_start_time', 'mo_start_time', 'mo_end_time', 'mo_sc_heliodistance', 'mo_sc_long_heeq', 'mo_sc_lat_heeq', 'icme_duration', 'icme_bmax', 'icme_bmean', 'icme_bstd', 'icme_speed_mean', 'icme_speed_std', 'mo_duration', 'mo_bmax', 'mo_bmean', 'mo_bstd', 'mo_bzmean', 'mo_bzmin', 'mo_bzstd', 'mo_bymean', 'mo_bystd', 'mo_speed_mean', 'mo_speed_std', 'mo_expansion_speed', 'mo_pdyn_mean', 'mo_pdyn_std', 'mo_density_mean', 'mo_density_std', 'mo_temperature_mean', 'mo_temperature_std', 'sheath_speed_mean', 'sheath_speed_std', 'sheath_density_mean', 'sheath_density_std', 'sheath_pdyn_mean', 'sheath_pdyn_std']
+2026-05-27 22:52:42,470  INFO     Wind events: 551
+2026-05-27 22:52:42,481  INFO     Wind events with valid timestamps: 551
+2026-05-27 22:53:26,982  INFO     Loading OMNI2 from /Users/pranjal/workspace/spectral_analysis/data/ICMECAT/omni2_all_years.dat …
+2026-05-27 22:53:29,755  INFO     OMNI2 loaded: 561,024 hourly rows
+2026-05-27 22:53:29,755  INFO     Fetching ICMECAT catalog …
+2026-05-27 22:53:31,072  INFO     Catalog loaded: 1976 total events, columns: ['Unnamed: 0', 'icmecat_id', 'sc_insitu', 'icme_start_time', 'mo_start_time', 'mo_end_time', 'mo_sc_heliodistance', 'mo_sc_long_heeq', 'mo_sc_lat_heeq', 'icme_duration', 'icme_bmax', 'icme_bmean', 'icme_bstd', 'icme_speed_mean', 'icme_speed_std', 'mo_duration', 'mo_bmax', 'mo_bmean', 'mo_bstd', 'mo_bzmean', 'mo_bzmin', 'mo_bzstd', 'mo_bymean', 'mo_bystd', 'mo_speed_mean', 'mo_speed_std', 'mo_expansion_speed', 'mo_pdyn_mean', 'mo_pdyn_std', 'mo_density_mean', 'mo_density_std', 'mo_temperature_mean', 'mo_temperature_std', 'sheath_speed_mean', 'sheath_speed_std', 'sheath_density_mean', 'sheath_density_std', 'sheath_pdyn_mean', 'sheath_pdyn_std']
+2026-05-27 22:53:31,074  INFO     Wind events: 551
+2026-05-27 22:53:31,088  INFO     Wind events with valid timestamps: 551
+2026-05-27 22:53:31,218  WARNING  Skipping quiet window 2024-06-14 08:48:00: 36% missing
+2026-05-27 22:53:31,971  WARNING  Skipping quiet window 2005-01-20 13:44:00: 54% missing
+2026-05-27 22:53:32,026  WARNING  Skipping ICME 2003-10-30 16:12:00: 40% missing speed
+2026-05-27 22:53:32,028  WARNING  Skipping ICME 2003-10-29 06:00:00: 100% missing speed
+2026-05-27 22:53:32,413  WARNING  Skipping quiet window 1997-09-29 23:15:00: 60% missing
+2026-05-27 22:53:32,518  INFO     ============================================================
+2026-05-27 22:53:32,518  INFO     Done.  ICME files : 549
+2026-05-27 22:53:32,518  INFO            Quiet files: 546
+2026-05-27 22:53:32,518  INFO            Skipped    : 2
+2026-05-27 22:53:32,518  INFO            Labels CSV : data/ICMECAT/labels.csv
+2026-05-27 22:53:32,518  INFO     ============================================================
