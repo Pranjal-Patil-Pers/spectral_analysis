@@ -39,6 +39,7 @@ Notes
 
 import os
 import logging
+from pathlib import Path
 import pandas as pd
 import numpy as np
 from datetime import timedelta
@@ -46,9 +47,12 @@ from tqdm import tqdm
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 
+_HERE        = Path(__file__).resolve().parent
+PROJECT_ROOT = _HERE.parents[1]
+
 ICMECAT_URL   = "https://helioforecast.space/static/sync/icmecat/HELIO4CAST_ICMECAT_v23.csv"
-OUTPUT_DIR    = "data/ICMECAT"
-OMNI2_LOCAL   = "/Users/pranjal/workspace/spectral_analysis/data/ICMECAT/omni2_all_years.dat"
+OUTPUT_DIR    = PROJECT_ROOT / "data" / "ICMECAT"
+OMNI2_LOCAL   = PROJECT_ROOT / "data" / "ICMECAT" / "omni2_all_years.dat"
 SPACECRAFT    = "Wind"           # filter to Wind only for clean hourly coverage
 MAX_EVENTS    = None             # set to e.g. 50 for a quick test run
 MISSING_FRAC  = 0.30             # skip event if >30% of timesteps are NaN speed
@@ -61,7 +65,7 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s  %(levelname)-7s  %(message)s",
     handlers=[
-        logging.FileHandler("icmecat_builder.log"),
+        logging.FileHandler(PROJECT_ROOT / "icmecat_builder.log"),
         logging.StreamHandler()
     ]
 )

@@ -4,3 +4,13 @@ data/raw/
 
 # macOS Finder metadata
 .DS_Store
+
+# Large raw data files
+data/ICMECAT/omni2_all_years.dat
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Runtime logs
+*.log

@@ -59,7 +59,7 @@ SERIES_LEN             = 48
 N_TREES                = 300
 RANDOM_STATE           = 42
 NUM_INSTANCES_PER_CLASS = 50   # 50 quiet + 50 ICME = 100 total
-NUM_CF                 = 100   # counterfactuals generated per instance
+NUM_CF                 = 5   # counterfactuals generated per instance
 
 
 # ── Main ───────────────────────────────────────────────────────────────────────
